@@ -17,8 +17,9 @@ import {
   startScanRequest,
   scanResultMessage,
   scanErrorMessage,
+  authLinkMessage,
 } from "@/lib/messages";
-import { appendScan } from "@/lib/storage";
+import { appendScan, setAuth } from "@/lib/storage";
 import { badgeColor } from "@/lib/scoring";
 import type { ScanResultMessage } from "@/lib/messages";
 
@@ -91,6 +92,16 @@ chrome.runtime.onMessage.addListener((raw, sender, sendResponse) => {
       tabId: sender.tab.id,
       color: "#ef4444",
     });
+  }
+
+  // Link bridge → store tokens. Only accept from a content script
+  // running on the AllyProof origin (the manifest already gates
+  // this, but verify sender url just in case).
+  const link = authLinkMessage.safeParse(raw);
+  if (link.success && sender.url && /^https:\/\/(.*\.)?allyproof\.com\//.test(sender.url)) {
+    void setAuth(link.data.tokens);
+    sendResponse({ ok: true });
+    return true;
   }
 
   return false;

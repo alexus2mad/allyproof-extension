@@ -53,6 +53,14 @@ export default defineManifest({
       js: ["src/content/scan-runner.ts"],
       run_at: "document_idle",
     },
+    {
+      // Magic-link bridge — only fires on the AllyProof origin.
+      // Listens for window.postMessage from /extension-link and
+      // forwards the minted tokens to the service worker.
+      matches: ["https://allyproof.com/*", "https://*.allyproof.com/*"],
+      js: ["src/content/link-bridge.ts"],
+      run_at: "document_idle",
+    },
   ],
   permissions: ["storage"],
   // No host_permissions array — the matches list above is the

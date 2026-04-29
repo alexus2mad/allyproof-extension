@@ -60,10 +60,25 @@ export const scanErrorMessage = z.object({
 });
 export type ScanErrorMessage = z.infer<typeof scanErrorMessage>;
 
+// ── Link bridge → Background ──────────────────────────────────────
+
+export const authLinkMessage = z.object({
+  type: z.literal("auth/link"),
+  tokens: z.object({
+    accessToken: z.string().startsWith("ap_ext_"),
+    refreshToken: z.string().startsWith("ap_extr_"),
+    accessExpiresAt: z.string(),
+    refreshExpiresAt: z.string(),
+    tokenId: z.string().uuid(),
+  }),
+});
+export type AuthLinkMessage = z.infer<typeof authLinkMessage>;
+
 export const allMessagesSchema = z.discriminatedUnion("type", [
   startScanRequest,
   runScanCommand,
   scanResultMessage,
   scanErrorMessage,
+  authLinkMessage,
 ]);
 export type AllMessages = z.infer<typeof allMessagesSchema>;

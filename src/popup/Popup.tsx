@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { ShieldCheck, Loader2, AlertCircle, ExternalLink } from "lucide-react";
+import { ShieldCheck, Loader2, AlertCircle, ExternalLink, Cloud, Check } from "lucide-react";
 import type { ProcessedViolation, SeverityCounts } from "@allyproof/scan-core";
 import { totalIssueCount } from "@allyproof/scan-core";
 import { scoreColorClasses } from "@/lib/scoring";
@@ -22,6 +22,8 @@ import {
   scanResultMessage,
   scanErrorMessage,
 } from "@/lib/messages";
+import { uploadScan } from "@/lib/api";
+import { getAuth, getSettings } from "@/lib/storage";
 
 type ScanState =
   | { stage: "idle"; pageUrl: string | null; pageTitle: string | null }
@@ -250,6 +252,8 @@ function ResultView({
         <SeverityChip label="Minor" count={scan.counts.minor} severity="minor" />
       </div>
 
+      <SaveToDashboardCallout scan={scan} />
+
       {top.length > 0 && (
         <div className="flex flex-col gap-2">
           <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -271,6 +275,109 @@ function ResultView({
         Re-scan
       </button>
     </div>
+  );
+}
+
+type SaveStatus =
+  | { stage: "idle" }
+  | { stage: "saving" }
+  | { stage: "saved"; dashboardUrl: string }
+  | { stage: "error"; message: string };
+
+function SaveToDashboardCallout({
+  scan,
+}: {
+  scan: Extract<ScanState, { stage: "ready" }>;
+}) {
+  const [authed, setAuthed] = useState<boolean | null>(null);
+  const [save, setSave] = useState<SaveStatus>({ stage: "idle" });
+
+  useEffect(() => {
+    void getAuth().then((a) => setAuthed(!!a));
+  }, []);
+
+  if (authed === null) return null;
+
+  if (!authed) {
+    return (
+      <div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-xs">
+        <div className="mb-2 font-medium">Save to your AllyProof dashboard</div>
+        <p className="mb-2 text-muted-foreground">
+          Sign in to track this site over time, get weekly auto-scans, and
+          unlock AI fix suggestions.
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            void (async () => {
+              const settings = await getSettings();
+              const linkUrl = `${settings.apiBase.replace(/\/+$/, "")}/extension-link?ext_id=${chrome.runtime.id}`;
+              await chrome.tabs.create({ url: linkUrl });
+            })();
+          }}
+          className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          Sign in <ExternalLink className="h-3 w-3" aria-hidden />
+        </button>
+      </div>
+    );
+  }
+
+  if (save.stage === "saved") {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          void (async () => {
+            const settings = await getSettings();
+            await chrome.tabs.create({
+              url: `${settings.apiBase.replace(/\/+$/, "")}${save.dashboardUrl}`,
+            });
+          })();
+        }}
+        className="inline-flex items-center justify-center gap-2 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+      >
+        <Check className="h-4 w-4" aria-hidden />
+        Saved · Open in dashboard
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={save.stage === "saving"}
+      onClick={() => {
+        void (async () => {
+          setSave({ stage: "saving" });
+          const result = await uploadScan({
+            targetUrl: scan.pageUrl,
+            pageTitle: scan.pageTitle,
+            durationMs: scan.durationMs,
+            score: scan.score,
+            counts: scan.counts,
+            violations: scan.violations,
+          });
+          if (result.error) {
+            setSave({ stage: "error", message: result.error.message });
+          } else {
+            setSave({ stage: "saved", dashboardUrl: result.data.dashboardUrl });
+          }
+        })();
+      }}
+      className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+    >
+      {save.stage === "saving" ? (
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+      ) : (
+        <Cloud className="h-4 w-4" aria-hidden />
+      )}
+      {save.stage === "saving"
+        ? "Saving…"
+        : save.stage === "error"
+          ? `Retry · ${save.message}`
+          : "Save to dashboard"}
+    </button>
   );
 }
 
