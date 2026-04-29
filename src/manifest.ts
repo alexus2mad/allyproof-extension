@@ -67,7 +67,12 @@ export default defineManifest({
       run_at: "document_idle",
     },
   ],
-  permissions: ["storage"],
+  // activeTab — granted on user click of the toolbar action. Lets
+  // the popup read the active tab's url + title without a blanket
+  // host permission. Auto-revoked when the user navigates or
+  // closes the tab. tabs WITHOUT activeTab would also work but
+  // surfaces a noisier "Read your browsing history" warning.
+  permissions: ["storage", "activeTab"],
   // No host_permissions array — the matches list above is the
   // origin grant the content script needs. Crawl-mode scans run
   // server-side via /api/v1/scan; the server fetches pages, not
