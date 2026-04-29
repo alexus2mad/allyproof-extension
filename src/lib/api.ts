@@ -152,6 +152,59 @@ async function authedRequest<T>(
   }
 }
 
+// ── Crawl (ad-hoc) ────────────────────────────────────────────────
+
+const crawlResponse = z.object({
+  data: z.object({
+    scan_id: z.string().uuid(),
+    status: z.string(),
+    max_pages: z.number().int(),
+    remaining_today: z.number().int(),
+    dashboard_url: z.string(),
+  }),
+  error: z.null(),
+});
+
+export interface CrawlInput {
+  targetUrl: string;
+  maxPages?: number;
+}
+
+export async function startCrawl(
+  input: CrawlInput
+): Promise<
+  ApiResult<{
+    scanId: string;
+    status: string;
+    maxPages: number;
+    remainingToday: number;
+    dashboardUrl: string;
+  }>
+> {
+  const result = await authedRequest(
+    "/api/extensions/scans/crawl",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        target_url: input.targetUrl,
+        max_pages: input.maxPages,
+      }),
+    },
+    (raw) => crawlResponse.parse(raw).data
+  );
+  if (result.error) return result;
+  return {
+    data: {
+      scanId: result.data.scan_id,
+      status: result.data.status,
+      maxPages: result.data.max_pages,
+      remainingToday: result.data.remaining_today,
+      dashboardUrl: result.data.dashboard_url,
+    },
+    error: null,
+  };
+}
+
 // ── Save-to-dashboard ─────────────────────────────────────────────
 
 const uploadResponse = z.object({
@@ -175,6 +228,58 @@ export interface UploadScanInput {
     minor: number;
   };
   violations: unknown[];
+}
+
+// ── AI fix ────────────────────────────────────────────────────────
+
+const aiFixResponse = z.object({
+  data: z.object({
+    suggestion: z.string(),
+    model_key: z.string(),
+  }),
+  error: z.null(),
+});
+
+export interface AiFixInput {
+  ruleId: string;
+  impact: "critical" | "serious" | "moderate" | "minor";
+  description: string;
+  helpUrl: string;
+  wcagCriteria: string[];
+  element: {
+    html: string;
+    selector: string;
+    failureSummary: string;
+  };
+}
+
+export async function aiFix(
+  input: AiFixInput
+): Promise<ApiResult<{ suggestion: string; modelKey: string }>> {
+  const result = await authedRequest(
+    "/api/extensions/ai/fix",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        rule_id: input.ruleId,
+        impact: input.impact,
+        description: input.description,
+        help_url: input.helpUrl,
+        wcag_criteria: input.wcagCriteria,
+        element: {
+          html: input.element.html,
+          selector: input.element.selector,
+          failure_summary: input.element.failureSummary,
+        },
+      }),
+    },
+    (raw) => aiFixResponse.parse(raw).data
+  );
+  if (result.error) return result;
+  return {
+    data: { suggestion: result.data.suggestion, modelKey: result.data.model_key },
+    error: null,
+  };
 }
 
 export async function uploadScan(

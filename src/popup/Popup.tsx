@@ -22,8 +22,9 @@ import {
   scanResultMessage,
   scanErrorMessage,
 } from "@/lib/messages";
-import { uploadScan } from "@/lib/api";
+import { uploadScan, aiFix, startCrawl } from "@/lib/api";
 import { getAuth, getSettings } from "@/lib/storage";
+import { Sparkles, ChevronDown, ChevronUp, Copy } from "lucide-react";
 
 type ScanState =
   | { stage: "idle"; pageUrl: string | null; pageTitle: string | null }
@@ -253,6 +254,7 @@ function ResultView({
       </div>
 
       <SaveToDashboardCallout scan={scan} />
+      <CrawlCallout scan={scan} />
 
       {top.length > 0 && (
         <div className="flex flex-col gap-2">
@@ -409,6 +411,7 @@ function SeverityChip({
 }
 
 function ViolationRow({ violation }: { violation: ProcessedViolation }) {
+  const [expanded, setExpanded] = useState(false);
   const impactTone =
     violation.impact === "critical"
       ? "text-red-600 dark:text-red-400"
@@ -418,8 +421,13 @@ function ViolationRow({ violation }: { violation: ProcessedViolation }) {
           ? "text-amber-600 dark:text-amber-400"
           : "text-muted-foreground";
   return (
-    <li className="rounded-md border border-border bg-card p-2 text-xs">
-      <div className="flex items-start gap-2">
+    <li className="rounded-md border border-border bg-card text-xs">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-start gap-2 p-2 text-left hover:bg-muted/40"
+        aria-expanded={expanded}
+      >
         <span className={`mt-[2px] uppercase ${impactTone}`} aria-label={`Impact: ${violation.impact}`}>
           {violation.impact[0]}
         </span>
@@ -435,6 +443,7 @@ function ViolationRow({ violation }: { violation: ProcessedViolation }) {
                 href={violation.helpUrl}
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
                 className="ml-auto inline-flex items-center gap-1 text-primary hover:underline"
               >
                 Docs <ExternalLink className="h-3 w-3" aria-hidden />
@@ -442,8 +451,215 @@ function ViolationRow({ violation }: { violation: ProcessedViolation }) {
             )}
           </div>
         </div>
-      </div>
+        {expanded ? (
+          <ChevronUp className="h-3 w-3 text-muted-foreground" aria-hidden />
+        ) : (
+          <ChevronDown className="h-3 w-3 text-muted-foreground" aria-hidden />
+        )}
+      </button>
+      {expanded && <ViolationDetail violation={violation} />}
     </li>
+  );
+}
+
+type CrawlState =
+  | { kind: "idle" }
+  | { kind: "queueing" }
+  | { kind: "queued"; scanId: string; remaining: number; dashboardUrl: string }
+  | { kind: "error"; message: string };
+
+function CrawlCallout({
+  scan,
+}: {
+  scan: Extract<ScanState, { stage: "ready" }>;
+}) {
+  const [authed, setAuthed] = useState<boolean | null>(null);
+  const [state, setState] = useState<CrawlState>({ kind: "idle" });
+
+  useEffect(() => {
+    void getAuth().then((a) => setAuthed(!!a));
+  }, []);
+
+  if (authed !== true) return null; // crawl is paid-tier; sign-in callout is shown above
+
+  const trigger = async () => {
+    setState({ kind: "queueing" });
+    const url = new URL(scan.pageUrl);
+    const result = await startCrawl({ targetUrl: `${url.protocol}//${url.hostname}` });
+    if (result.error) {
+      setState({ kind: "error", message: result.error.message });
+    } else {
+      setState({
+        kind: "queued",
+        scanId: result.data.scanId,
+        remaining: result.data.remainingToday,
+        dashboardUrl: result.data.dashboardUrl,
+      });
+    }
+  };
+
+  if (state.kind === "queued") {
+    return (
+      <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs dark:border-emerald-900 dark:bg-emerald-950/40">
+        <div className="mb-1 font-medium text-emerald-700 dark:text-emerald-300">
+          Crawl queued
+        </div>
+        <p className="mb-2 text-muted-foreground">
+          Multi-page scan running on AllyProof&apos;s servers. {state.remaining}{" "}
+          ad-hoc scans left today.
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            void (async () => {
+              const settings = await getSettings();
+              await chrome.tabs.create({
+                url: `${settings.apiBase.replace(/\/+$/, "")}${state.dashboardUrl}`,
+              });
+            })();
+          }}
+          className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-card px-2 py-1 text-[11px] font-medium text-emerald-700 hover:bg-muted dark:border-emerald-800 dark:text-emerald-400"
+        >
+          Track progress in dashboard
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-border bg-card p-3 text-xs">
+      <div className="mb-1 font-medium">Scan the whole site</div>
+      <p className="mb-2 text-muted-foreground">
+        Run a multi-page crawl on AllyProof&apos;s servers — full Playwright
+        engine, three-engine consensus.
+      </p>
+      <button
+        type="button"
+        disabled={state.kind === "queueing"}
+        onClick={() => void trigger()}
+        className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+      >
+        {state.kind === "queueing" ? (
+          <>
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> Queueing…
+          </>
+        ) : (
+          "Crawl this site"
+        )}
+      </button>
+      {state.kind === "error" && (
+        <p className="mt-2 text-[11px] text-red-600 dark:text-red-400">
+          {state.message}
+        </p>
+      )}
+    </div>
+  );
+}
+
+type AiState =
+  | { stage: "idle" }
+  | { stage: "loading" }
+  | { stage: "ready"; markdown: string; modelKey: string }
+  | { stage: "error"; message: string }
+  | { stage: "auth-required" };
+
+function ViolationDetail({ violation }: { violation: ProcessedViolation }) {
+  const [ai, setAi] = useState<AiState>({ stage: "idle" });
+  const node = violation.nodes[0];
+
+  const generate = async () => {
+    setAi({ stage: "loading" });
+    const auth = await getAuth();
+    if (!auth) {
+      setAi({ stage: "auth-required" });
+      return;
+    }
+    const result = await aiFix({
+      ruleId: violation.ruleId,
+      impact: violation.impact,
+      description: violation.description,
+      helpUrl: violation.helpUrl,
+      wcagCriteria: violation.wcagCriteria,
+      element: {
+        html: node?.html ?? "",
+        selector: node?.target?.[0] ?? "",
+        failureSummary: node?.failureSummary ?? "",
+      },
+    });
+    if (result.error) {
+      setAi({ stage: "error", message: result.error.message });
+    } else {
+      setAi({
+        stage: "ready",
+        markdown: result.data.suggestion,
+        modelKey: result.data.modelKey,
+      });
+    }
+  };
+
+  return (
+    <div className="border-t border-border bg-muted/20 p-2">
+      {node?.html && (
+        <details className="mb-2">
+          <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground">
+            Failing HTML
+          </summary>
+          <pre className="mt-1 max-h-32 overflow-auto rounded-sm bg-background p-2 text-[11px]">
+            <code>{node.html}</code>
+          </pre>
+        </details>
+      )}
+      {ai.stage === "idle" && (
+        <button
+          type="button"
+          onClick={() => void generate()}
+          className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          <Sparkles className="h-3 w-3" aria-hidden /> Generate AI fix
+        </button>
+      )}
+      {ai.stage === "loading" && (
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> Generating fix…
+        </div>
+      )}
+      {ai.stage === "auth-required" && (
+        <p className="text-[11px] text-muted-foreground">
+          Sign in to your AllyProof dashboard to use AI fix suggestions.
+        </p>
+      )}
+      {ai.stage === "error" && (
+        <div className="flex flex-col gap-1">
+          <p className="text-[11px] text-red-600 dark:text-red-400">{ai.message}</p>
+          <button
+            type="button"
+            onClick={() => void generate()}
+            className="w-fit rounded-md border border-border bg-card px-2 py-1 text-[11px] font-medium hover:bg-muted"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      {ai.stage === "ready" && (
+        <div className="flex flex-col gap-2">
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-sm bg-background p-2 text-[11px]">
+            {ai.markdown}
+          </pre>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void navigator.clipboard.writeText(ai.markdown)}
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[11px] font-medium hover:bg-muted"
+            >
+              <Copy className="h-3 w-3" aria-hidden /> Copy
+            </button>
+            <span className="text-[10px] text-muted-foreground">
+              {ai.modelKey}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -1,6 +1,11 @@
 import { defineManifest } from "@crxjs/vite-plugin";
 import pkg from "../package.json";
 
+// Build target — `firefox` flips a couple of manifest fields that
+// Firefox handles differently. Default is Chromium (Chrome / Edge /
+// Brave / Arc).
+const isFirefox = process.env.BROWSER_TARGET === "firefox";
+
 /**
  * AllyProof browser-extension manifest (MV3).
  *
@@ -71,4 +76,33 @@ export default defineManifest({
     page: "src/options/index.html",
     open_in_tab: true,
   },
+  // Side panel — Chrome 114+. Firefox doesn't support sidePanel as
+  // of MV3; the entry is omitted there and the popup remains the
+  // primary surface.
+  ...(isFirefox
+    ? {}
+    : {
+        side_panel: {
+          default_path: "src/sidepanel/index.html",
+        },
+      }),
+  // DevTools page — invisible registration entry that calls
+  // chrome.devtools.panels.create.
+  devtools_page: "src/devtools/index.html",
+  // Firefox requires a stable extension ID for development +
+  // signing. Chrome derives it from the public key; Firefox needs
+  // browser_specific_settings.gecko.id.
+  ...(isFirefox
+    ? {
+        browser_specific_settings: {
+          gecko: {
+            id: "extension@allyproof.com",
+            strict_min_version: "115.0",
+            data_collection_permissions: {
+              required: [],
+            },
+          },
+        },
+      }
+    : {}),
 });
