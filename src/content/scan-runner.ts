@@ -85,29 +85,35 @@ async function runScan(): Promise<void> {
 }
 
 /**
- * Visual element highlighter. Mirrors what axe DevTools does in
- * its non-DevTools surfaces: scrolls the element into view and
- * draws a labelled outline overlay for a few seconds. The
- * extension's popup can't call chrome.devtools.inspectedWindow.eval
- * (that API is gated to devtools-context pages), so highlighting
- * via DOM manipulation is the closest equivalent we get from the
- * popup.
+ * Visual element highlighter. Scrolls the element into view and
+ * draws a labelled outline overlay that stays visible until the
+ * user dismisses it explicitly — no auto-timeout. Three ways to
+ * clear:
+ *   - Press Escape
+ *   - Click the overlay itself
+ *   - Trigger another highlight (the new one replaces it)
  *
  * Implementation choices:
- *   - The overlay is a position:fixed div placed by getBoundingClientRect
- *     (NOT a class added to the target). That way the target's own
- *     stylesheet, layout, and event handlers are completely untouched.
- *   - shadow DOM hosts our overlay so the audited page's CSS can't
- *     leak through and skew the visuals.
- *   - The overlay self-removes after 3.5s; we also expose a clear
- *     handle so a follow-up highlight cleans the previous one up first.
+ *   - The overlay is a position:fixed div placed by
+ *     getBoundingClientRect (NOT a class added to the target),
+ *     so the target's stylesheet, layout, and event handlers are
+ *     untouched.
+ *   - Shadow DOM hosts the overlay so the audited page's CSS
+ *     can't leak through and skew the visuals.
+ *   - clearHighlight is exposed so a follow-up highlight resets
+ *     the previous one before drawing the new.
  */
 const HIGHLIGHT_HOST_ID = "__allyproof_highlight_root__";
-const HIGHLIGHT_DURATION_MS = 3500;
+
+let highlightEscHandler: ((e: KeyboardEvent) => void) | null = null;
 
 function clearHighlight() {
   const host = document.getElementById(HIGHLIGHT_HOST_ID);
   if (host) host.remove();
+  if (highlightEscHandler) {
+    document.removeEventListener("keydown", highlightEscHandler, true);
+    highlightEscHandler = null;
+  }
 }
 
 function highlightSelector(selector: string, label?: string): boolean {
@@ -149,7 +155,14 @@ function highlightSelector(selector: string, label?: string): boolean {
       "background:rgba(16,185,129,0.06)",
       "transition:opacity 200ms ease",
       "opacity:0",
+      // The box is the click-to-dismiss surface — re-enable
+      // pointer events for it specifically while the host stays
+      // pointer-events:none so the rest of the page is clickable.
+      "pointer-events:auto",
+      "cursor:pointer",
     ].join(";");
+    box.title = "Click to dismiss · or press Esc";
+    box.addEventListener("click", clearHighlight);
     root.appendChild(box);
 
     if (label) {
@@ -167,8 +180,12 @@ function highlightSelector(selector: string, label?: string): boolean {
         "max-width:80vw",
         "overflow:hidden",
         "text-overflow:ellipsis",
+        "pointer-events:auto",
+        "cursor:pointer",
       ].join(";");
-      tag.textContent = `AllyProof — ${label}`;
+      tag.textContent = `AllyProof — ${label}  ✕`;
+      tag.title = "Click to dismiss · or press Esc";
+      tag.addEventListener("click", clearHighlight);
       root.appendChild(tag);
     }
 
@@ -178,7 +195,16 @@ function highlightSelector(selector: string, label?: string): boolean {
       box.style.opacity = "1";
     });
 
-    window.setTimeout(clearHighlight, HIGHLIGHT_DURATION_MS);
+    // Esc dismisses without leaving the keyboard. Captured at the
+    // document level (capture phase) so a focused input on the
+    // page doesn't swallow it first.
+    highlightEscHandler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        clearHighlight();
+        e.stopPropagation();
+      }
+    };
+    document.addEventListener("keydown", highlightEscHandler, true);
   }, 220);
 
   return true;

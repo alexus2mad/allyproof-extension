@@ -504,6 +504,25 @@ function ViolationRow({
   );
 }
 
+/**
+ * The Popup component is mounted in TWO surfaces:
+ *   - chrome.action popup (src/popup/index.html)
+ *   - chrome.sidePanel    (src/sidepanel/index.html)
+ *
+ * They share UI but the Show flow differs:
+ *   - From the popup: open the side panel, then close the popup
+ *     so the page is unobscured.
+ *   - From the side panel: just send the highlight — closing
+ *     the side panel would defeat the whole point.
+ *
+ * window.location.pathname is the cleanest way to tell them
+ * apart at runtime; both files set up identical roots so the
+ * component is otherwise context-agnostic.
+ */
+function isInSidePanel(): boolean {
+  return /\/sidepanel\//.test(window.location.pathname);
+}
+
 function HighlightButton({
   selector,
   label,
@@ -522,38 +541,32 @@ function HighlightButton({
       return;
     }
     try {
-      // Fire the highlight first so the page-side overlay is
-      // already drawn by the time we hand attention to the side
-      // panel. The two operations are independent — a side-panel
-      // open failure should not stop the highlight.
       await chrome.tabs.sendMessage(tab.id, {
         type: "scan/highlight",
         selector,
         label: label?.slice(0, 80),
       });
 
-      // Open the side panel so results stay visible alongside the
-      // page after the popup closes. Chrome popup windows are
-      // opaque by browser design (confirmed by chromium-extensions
-      // and crbug 40852436); the side panel is the supported way
-      // to keep our UI on screen without obscuring the highlight.
-      // Requires Chrome 116+ for the open() method; older builds
-      // gracefully fall through to popup-close-only.
+      setState("ok");
+
+      if (isInSidePanel()) {
+        // Already docked — flash and stay put.
+        setTimeout(() => setState("idle"), 1200);
+        return;
+      }
+
+      // Popup context: open the side panel so results remain
+      // visible alongside the page, then close the popup.
+      // Requires Chrome 116+; older builds fall through to
+      // popup-close-only with state persistence catching the
+      // next reopen.
       if (chrome.sidePanel?.open) {
         await chrome.sidePanel
           .open({ windowId: tab.windowId })
           .catch(() => {
-            /* User denied / not supported — popup still closes,
-               state persists, user can re-open via toolbar. */
+            /* user denied / unsupported — popup still closes */
           });
       }
-
-      setState("ok");
-      // Close the popup so the page (with the highlight) is fully
-      // visible alongside the side panel. Short delay lets Chrome
-      // settle the side-panel open animation before the popup
-      // collapses — without it the side panel sometimes fails to
-      // render its initial paint.
       setTimeout(() => window.close(), 250);
     } catch {
       setState("fail");
