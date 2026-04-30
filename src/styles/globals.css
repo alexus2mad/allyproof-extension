@@ -63,12 +63,17 @@
 html, body {
   margin: 0;
   font-family: var(--font-sans);
-  background: var(--color-background);
+  /* Background lives on #popup-root so the entire popup surface
+     (background + content) fades together when dimmed. If the
+     background were on body, opacity on #popup-root would only
+     dim the foreground while the dark backdrop stayed solid. */
+  background: transparent;
   color: var(--color-foreground);
   -webkit-font-smoothing: antialiased;
 }
 
 #popup-root {
+  background: var(--color-background);
   min-width: 400px;
   min-height: 480px;
   max-width: 600px;
@@ -77,9 +82,8 @@ html, body {
 
 /**
  * Popup goes near-invisible after the user clicks "Show" so the
- * in-page highlight overlay isn't obscured. The body re-enters
- * full opacity on any pointer move/click — the popup snaps back
- * the moment the user's attention returns to it.
+ * in-page highlight overlay isn't obscured. Background fades with
+ * the rest because background lives on #popup-root, not body.
  *
  * pointer-events:none on the dimmed state prevents accidental
  * button clicks while the user is looking at the page; html-level
