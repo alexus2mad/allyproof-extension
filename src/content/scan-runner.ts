@@ -116,6 +116,86 @@ function clearHighlight() {
   }
 }
 
+function isInViewport(rect: DOMRect): boolean {
+  return (
+    rect.top >= 0 &&
+    rect.left >= 0 &&
+    rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+    rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+  );
+}
+
+function drawOverlay(target: Element, label?: string): void {
+  const rect = target.getBoundingClientRect();
+  clearHighlight();
+
+  const host = document.createElement("div");
+  host.id = HIGHLIGHT_HOST_ID;
+  host.style.cssText =
+    "position:fixed;inset:0;pointer-events:none;z-index:2147483647;";
+  const root = host.attachShadow({ mode: "closed" });
+
+  const box = document.createElement("div");
+  box.style.cssText = [
+    "position:fixed",
+    `top:${rect.top - 4}px`,
+    `left:${rect.left - 4}px`,
+    `width:${rect.width + 8}px`,
+    `height:${rect.height + 8}px`,
+    "border:2px solid #10b981",
+    "border-radius:4px",
+    "box-shadow:0 0 0 2px rgba(16,185,129,0.25), 0 8px 24px rgba(0,0,0,0.18)",
+    "background:rgba(16,185,129,0.06)",
+    "transition:opacity 200ms ease",
+    "opacity:0",
+    "pointer-events:auto",
+    "cursor:pointer",
+  ].join(";");
+  box.title = "Click to dismiss · or press Esc";
+  box.addEventListener("click", clearHighlight);
+  root.appendChild(box);
+
+  if (label) {
+    const tag = document.createElement("div");
+    tag.style.cssText = [
+      "position:fixed",
+      `top:${Math.max(8, rect.top - 28)}px`,
+      `left:${rect.left - 4}px`,
+      "padding:2px 6px",
+      "background:#10b981",
+      "color:#ffffff",
+      "font:600 11px/1.2 system-ui,-apple-system,Segoe UI,sans-serif",
+      "border-radius:3px",
+      "white-space:nowrap",
+      "max-width:80vw",
+      "overflow:hidden",
+      "text-overflow:ellipsis",
+      "pointer-events:auto",
+      "cursor:pointer",
+    ].join(";");
+    tag.textContent = `AllyProof — ${label}  ✕`;
+    tag.title = "Click to dismiss · or press Esc";
+    tag.addEventListener("click", clearHighlight);
+    root.appendChild(tag);
+  }
+
+  document.documentElement.appendChild(host);
+  requestAnimationFrame(() => {
+    box.style.opacity = "1";
+  });
+
+  // Esc dismisses without leaving the keyboard. Captured at the
+  // document level (capture phase) so a focused input on the
+  // page doesn't swallow it first.
+  highlightEscHandler = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      clearHighlight();
+      e.stopPropagation();
+    }
+  };
+  document.addEventListener("keydown", highlightEscHandler, true);
+}
+
 function highlightSelector(selector: string, label?: string): boolean {
   let target: Element | null = null;
   try {
@@ -125,87 +205,39 @@ function highlightSelector(selector: string, label?: string): boolean {
   }
   if (!(target instanceof Element)) return false;
 
-  // Scroll into view first so the overlay coordinates we capture
-  // afterward are post-scroll.
+  // Fast path: element is already on screen — draw immediately,
+  // no scroll, no waiting.
+  if (isInViewport(target.getBoundingClientRect())) {
+    drawOverlay(target, label);
+    return true;
+  }
+
+  // Slow path: scroll into view, then draw AFTER scroll settles.
+  // Previously we used a fixed 220ms timeout, but smooth scroll
+  // on long pages takes 500-1000ms+ — drawing mid-scroll left the
+  // overlay anchored to mid-scroll viewport coords (off-screen by
+  // the time scroll completed), which manifested as "highlight
+  // doesn't appear unless I click Show again."
+  //
+  // scrollend (Chrome 114+) is the right event: fires once after
+  // smooth scroll finishes. We also arm a generous timeout
+  // fallback in case scrollend never fires (rare — happens when
+  // a CSS scroll-snap intervenes mid-flight, or on engines that
+  // skip smooth scroll for prefers-reduced-motion).
   target.scrollIntoView({ behavior: "smooth", block: "center" });
 
-  // Pause briefly to let smooth scroll settle, then position the
-  // overlay. Using a small timeout instead of scrollend (which is
-  // patchily supported and skips on prefers-reduced-motion).
-  window.setTimeout(() => {
-    const rect = target!.getBoundingClientRect();
-    clearHighlight();
+  let drawn = false;
+  const drawOnce = () => {
+    if (drawn) return;
+    drawn = true;
+    document.removeEventListener("scrollend", drawOnce);
+    drawOverlay(target!, label);
+  };
 
-    const host = document.createElement("div");
-    host.id = HIGHLIGHT_HOST_ID;
-    host.style.cssText =
-      "position:fixed;inset:0;pointer-events:none;z-index:2147483647;";
-    const root = host.attachShadow({ mode: "closed" });
-
-    const box = document.createElement("div");
-    box.style.cssText = [
-      "position:fixed",
-      `top:${rect.top - 4}px`,
-      `left:${rect.left - 4}px`,
-      `width:${rect.width + 8}px`,
-      `height:${rect.height + 8}px`,
-      "border:2px solid #10b981",
-      "border-radius:4px",
-      "box-shadow:0 0 0 2px rgba(16,185,129,0.25), 0 8px 24px rgba(0,0,0,0.18)",
-      "background:rgba(16,185,129,0.06)",
-      "transition:opacity 200ms ease",
-      "opacity:0",
-      // The box is the click-to-dismiss surface — re-enable
-      // pointer events for it specifically while the host stays
-      // pointer-events:none so the rest of the page is clickable.
-      "pointer-events:auto",
-      "cursor:pointer",
-    ].join(";");
-    box.title = "Click to dismiss · or press Esc";
-    box.addEventListener("click", clearHighlight);
-    root.appendChild(box);
-
-    if (label) {
-      const tag = document.createElement("div");
-      tag.style.cssText = [
-        "position:fixed",
-        `top:${Math.max(8, rect.top - 28)}px`,
-        `left:${rect.left - 4}px`,
-        "padding:2px 6px",
-        "background:#10b981",
-        "color:#ffffff",
-        "font:600 11px/1.2 system-ui,-apple-system,Segoe UI,sans-serif",
-        "border-radius:3px",
-        "white-space:nowrap",
-        "max-width:80vw",
-        "overflow:hidden",
-        "text-overflow:ellipsis",
-        "pointer-events:auto",
-        "cursor:pointer",
-      ].join(";");
-      tag.textContent = `AllyProof — ${label}  ✕`;
-      tag.title = "Click to dismiss · or press Esc";
-      tag.addEventListener("click", clearHighlight);
-      root.appendChild(tag);
-    }
-
-    document.documentElement.appendChild(host);
-    // Fade in next frame so the transition runs.
-    requestAnimationFrame(() => {
-      box.style.opacity = "1";
-    });
-
-    // Esc dismisses without leaving the keyboard. Captured at the
-    // document level (capture phase) so a focused input on the
-    // page doesn't swallow it first.
-    highlightEscHandler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        clearHighlight();
-        e.stopPropagation();
-      }
-    };
-    document.addEventListener("keydown", highlightEscHandler, true);
-  }, 220);
+  document.addEventListener("scrollend", drawOnce, { once: true });
+  // Fallback: 1.2s is generous for smooth scroll on long pages
+  // and bounded enough that the user perceives it as snappy.
+  window.setTimeout(drawOnce, 1200);
 
   return true;
 }
