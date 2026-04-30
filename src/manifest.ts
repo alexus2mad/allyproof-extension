@@ -72,7 +72,10 @@ export default defineManifest({
   // host permission. Auto-revoked when the user navigates or
   // closes the tab. tabs WITHOUT activeTab would also work but
   // surfaces a noisier "Read your browsing history" warning.
-  permissions: ["storage", "activeTab"],
+  // sidePanel — required by chrome.sidePanel.open() (Chrome 116+),
+  // which the popup calls when the user clicks "Show on page" so
+  // results stay visible alongside the highlighted element.
+  permissions: ["storage", "activeTab", "sidePanel"],
   // No host_permissions array — the matches list above is the
   // origin grant the content script needs. Crawl-mode scans run
   // server-side via /api/v1/scan; the server fetches pages, not

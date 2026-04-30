@@ -63,33 +63,13 @@
 html, body {
   margin: 0;
   font-family: var(--font-sans);
-  /* Background lives on #popup-root so the entire popup surface
-     (background + content) fades together when dimmed. If the
-     background were on body, opacity on #popup-root would only
-     dim the foreground while the dark backdrop stayed solid. */
-  background: transparent;
+  background: var(--color-background);
   color: var(--color-foreground);
   -webkit-font-smoothing: antialiased;
 }
 
 #popup-root {
-  background: var(--color-background);
   min-width: 400px;
   min-height: 480px;
   max-width: 600px;
-  transition: opacity 180ms ease;
-}
-
-/**
- * Popup goes near-invisible after the user clicks "Show" so the
- * in-page highlight overlay isn't obscured. Background fades with
- * the rest because background lives on #popup-root, not body.
- *
- * pointer-events:none on the dimmed state prevents accidental
- * button clicks while the user is looking at the page; html-level
- * mouseenter re-engages first via JS, restoring interactivity.
- */
-#popup-root.allyproof-dimmed {
-  opacity: 0.08;
-  pointer-events: none;
 }

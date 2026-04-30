@@ -48,37 +48,6 @@ export function Popup() {
     pageUrl: null,
     pageTitle: null,
   });
-  const [dimmed, setDimmed] = useState(false);
-
-  // Toggle the dimmed class on the popup root and listen for any
-  // pointer activity to re-engage. Once the user moves the mouse
-  // back over the popup or clicks anywhere, opacity snaps to 1
-  // and pointer-events come back.
-  useEffect(() => {
-    const root = document.getElementById("popup-root");
-    if (!root) return;
-    if (dimmed) {
-      root.classList.add("allyproof-dimmed");
-    } else {
-      root.classList.remove("allyproof-dimmed");
-    }
-  }, [dimmed]);
-
-  useEffect(() => {
-    if (!dimmed) return;
-    const reengage = () => setDimmed(false);
-    // mouseenter on documentElement fires when the cursor crosses
-    // back into the popup window. click is a belt-and-braces
-    // fallback in case mouseenter doesn't fire (some platforms
-    // skip it when the popup wasn't the previously-focused
-    // surface).
-    document.documentElement.addEventListener("mouseenter", reengage, { once: true });
-    document.documentElement.addEventListener("click", reengage, { once: true });
-    return () => {
-      document.documentElement.removeEventListener("mouseenter", reengage);
-      document.documentElement.removeEventListener("click", reengage);
-    };
-  }, [dimmed]);
 
   // Hydrate from storage on mount. If we already have a stored
   // scan for the active tab's URL, jump straight to the ready
@@ -181,11 +150,7 @@ export function Popup() {
         <ScanningView pageTitle={scan.pageTitle} pageUrl={scan.pageUrl} />
       )}
       {scan.stage === "ready" && (
-        <ResultView
-          scan={scan}
-          onRescan={startScan}
-          onHighlight={() => setDimmed(true)}
-        />
+        <ResultView scan={scan} onRescan={startScan} />
       )}
       {scan.stage === "error" && (
         <ErrorView message={scan.message} onRetry={startScan} />
@@ -284,11 +249,9 @@ function ScanningView({
 function ResultView({
   scan,
   onRescan,
-  onHighlight,
 }: {
   scan: Extract<ScanState, { stage: "ready" }>;
   onRescan: () => void;
-  onHighlight: () => void;
 }) {
   const colors = scoreColorClasses(scan.score);
   const total = totalIssueCount(scan.counts);
@@ -329,7 +292,7 @@ function ResultView({
           </div>
           <ul className="flex flex-col gap-2">
             {top.map((v) => (
-              <ViolationRow key={v.ruleId} violation={v} onHighlight={onHighlight} />
+              <ViolationRow key={v.ruleId} violation={v} />
             ))}
           </ul>
         </div>
@@ -478,10 +441,8 @@ function SeverityChip({
 
 function ViolationRow({
   violation,
-  onHighlight,
 }: {
   violation: ProcessedViolation;
-  onHighlight?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const impactTone =
@@ -516,7 +477,6 @@ function ViolationRow({
                 <HighlightButton
                   selector={firstSelector}
                   label={violation.help || violation.ruleId}
-                  onTriggered={onHighlight}
                 />
               )}
               {violation.helpUrl && (
@@ -547,33 +507,54 @@ function ViolationRow({
 function HighlightButton({
   selector,
   label,
-  onTriggered,
 }: {
   selector: string;
   label?: string;
-  onTriggered?: () => void;
 }) {
   const [state, setState] = useState<"idle" | "ok" | "fail">("idle");
 
   const trigger = async (e: React.MouseEvent) => {
     e.stopPropagation();
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id == null) {
+    if (tab?.id == null || tab.windowId == null) {
       setState("fail");
       setTimeout(() => setState("idle"), 1500);
       return;
     }
     try {
+      // Fire the highlight first so the page-side overlay is
+      // already drawn by the time we hand attention to the side
+      // panel. The two operations are independent — a side-panel
+      // open failure should not stop the highlight.
       await chrome.tabs.sendMessage(tab.id, {
         type: "scan/highlight",
         selector,
         label: label?.slice(0, 80),
       });
+
+      // Open the side panel so results stay visible alongside the
+      // page after the popup closes. Chrome popup windows are
+      // opaque by browser design (confirmed by chromium-extensions
+      // and crbug 40852436); the side panel is the supported way
+      // to keep our UI on screen without obscuring the highlight.
+      // Requires Chrome 116+ for the open() method; older builds
+      // gracefully fall through to popup-close-only.
+      if (chrome.sidePanel?.open) {
+        await chrome.sidePanel
+          .open({ windowId: tab.windowId })
+          .catch(() => {
+            /* User denied / not supported — popup still closes,
+               state persists, user can re-open via toolbar. */
+          });
+      }
+
       setState("ok");
-      // Tell the parent to dim the popup so the in-page highlight
-      // is visible. Re-engagement on mouseenter / click clears it.
-      onTriggered?.();
-      setTimeout(() => setState("idle"), 1200);
+      // Close the popup so the page (with the highlight) is fully
+      // visible alongside the side panel. Short delay lets Chrome
+      // settle the side-panel open animation before the popup
+      // collapses — without it the side panel sometimes fails to
+      // render its initial paint.
+      setTimeout(() => window.close(), 250);
     } catch {
       setState("fail");
       setTimeout(() => setState("idle"), 1500);
