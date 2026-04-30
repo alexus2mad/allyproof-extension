@@ -24,6 +24,7 @@ import {
 } from "@/lib/messages";
 import { uploadScan, aiFix, startCrawl } from "@/lib/api";
 import { getAuth, getSettings, getRecentScans } from "@/lib/storage";
+import { useAuth } from "@/hooks/use-auth";
 import { Sparkles, ChevronDown, ChevronUp, Copy, Crosshair } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { prettyHtml } from "@/lib/pretty-html";
@@ -320,16 +321,19 @@ function SaveToDashboardCallout({
 }: {
   scan: Extract<ScanState, { stage: "ready" }>;
 }) {
-  const [authed, setAuthed] = useState<boolean | null>(null);
+  const { auth, loading } = useAuth();
   const [save, setSave] = useState<SaveStatus>({ stage: "idle" });
 
+  // Reset the saved state when auth changes (e.g. user just
+  // signed in mid-session). Otherwise a stale "Saved" pill could
+  // hang around from a previous scan upload.
   useEffect(() => {
-    void getAuth().then((a) => setAuthed(!!a));
-  }, []);
+    setSave({ stage: "idle" });
+  }, [auth?.tokenId]);
 
-  if (authed === null) return null;
+  if (loading) return null;
 
-  if (!authed) {
+  if (!auth) {
     return (
       <div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-xs">
         <div className="mb-2 font-medium">Save to your AllyProof dashboard</div>
@@ -605,14 +609,16 @@ function CrawlCallout({
 }: {
   scan: Extract<ScanState, { stage: "ready" }>;
 }) {
-  const [authed, setAuthed] = useState<boolean | null>(null);
+  const { auth, loading } = useAuth();
   const [state, setState] = useState<CrawlState>({ kind: "idle" });
 
+  // Drop any stale crawl state when the user re-authes (e.g.
+  // after switching orgs by re-linking).
   useEffect(() => {
-    void getAuth().then((a) => setAuthed(!!a));
-  }, []);
+    setState({ kind: "idle" });
+  }, [auth?.tokenId]);
 
-  if (authed !== true) return null; // crawl is paid-tier; sign-in callout is shown above
+  if (loading || !auth) return null; // crawl is paid-tier; sign-in callout is shown above
 
   const trigger = async () => {
     setState({ kind: "queueing" });
