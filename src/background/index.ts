@@ -100,7 +100,23 @@ chrome.runtime.onMessage.addListener((raw, sender, sendResponse) => {
   // this, but verify sender url just in case).
   const link = authLinkMessage.safeParse(raw);
   if (link.success && sender.url && /^https:\/\/(.*\.)?allyproof\.com\//.test(sender.url)) {
-    void setAuth(link.data.tokens);
+    void (async () => {
+      await setAuth(link.data.tokens);
+      // Refocus the tab the user was on when they clicked Sign in,
+      // then close the /extension-link tab. The short delay lets
+      // the page render its "Linked successfully" pill so the
+      // user has visual confirmation before the tab disappears.
+      const linkTabId = sender.tab?.id;
+      const returnTabId = link.data.returnTabId;
+      setTimeout(() => {
+        if (returnTabId != null) {
+          void chrome.tabs.update(returnTabId, { active: true }).catch(() => {});
+        }
+        if (linkTabId != null) {
+          void chrome.tabs.remove(linkTabId).catch(() => {});
+        }
+      }, 700);
+    })();
     sendResponse({ ok: true });
     return true;
   }

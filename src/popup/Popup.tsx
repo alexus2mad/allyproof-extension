@@ -346,7 +346,21 @@ function SaveToDashboardCallout({
           onClick={() => {
             void (async () => {
               const settings = await getSettings();
-              const linkUrl = `${settings.apiBase.replace(/\/+$/, "")}/extension-link?ext_id=${chrome.runtime.id}`;
+              // Capture the source tab so the background can refocus
+              // it after the link succeeds. From the side panel
+              // context this is the tab the user was viewing when
+              // they clicked Sign in; from the popup it's the same.
+              const [sourceTab] = await chrome.tabs.query({
+                active: true,
+                currentWindow: true,
+              });
+              const params = new URLSearchParams({
+                ext_id: chrome.runtime.id,
+              });
+              if (sourceTab?.id != null) {
+                params.set("return_tab_id", String(sourceTab.id));
+              }
+              const linkUrl = `${settings.apiBase.replace(/\/+$/, "")}/extension-link?${params.toString()}`;
               await chrome.tabs.create({ url: linkUrl });
             })();
           }}

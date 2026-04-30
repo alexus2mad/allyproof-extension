@@ -32,6 +32,7 @@ const tokensSchema = z.object({
 const envelopeSchema = z.object({
   type: z.literal("allyproof:link-tokens"),
   ext_id: z.string(),
+  return_tab_id: z.string().optional(),
   tokens: tokensSchema,
 });
 
@@ -47,7 +48,10 @@ window.addEventListener("message", (event) => {
   if (parsed.data.ext_id !== chrome.runtime.id) return;
 
   const { tokens } = parsed.data;
-  // Forward to background. The SW handles storage.
+  const returnTabId = parsed.data.return_tab_id
+    ? Number.parseInt(parsed.data.return_tab_id, 10)
+    : undefined;
+  // Forward to background. The SW handles storage + tab cleanup.
   void chrome.runtime
     .sendMessage({
       type: "auth/link",
@@ -58,6 +62,10 @@ window.addEventListener("message", (event) => {
         refreshExpiresAt: tokens.refresh_expires_at,
         tokenId: tokens.token_id,
       },
+      returnTabId:
+        returnTabId !== undefined && Number.isFinite(returnTabId) && returnTabId >= 0
+          ? returnTabId
+          : undefined,
     })
     .then(() => {
       // Echo back so the page can confirm the SW received it.

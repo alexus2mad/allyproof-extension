@@ -88,6 +88,8 @@ export const authLinkMessage = z.object({
     refreshExpiresAt: z.string(),
     tokenId: z.string().uuid(),
   }),
+  /** Optional: tab id to refocus after the link succeeds. */
+  returnTabId: z.number().int().nonnegative().optional(),
 });
 export type AuthLinkMessage = z.infer<typeof authLinkMessage>;
 
