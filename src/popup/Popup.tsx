@@ -25,6 +25,7 @@ import {
 import { uploadScan, aiFix, startCrawl } from "@/lib/api";
 import { getAuth, getSettings } from "@/lib/storage";
 import { Sparkles, ChevronDown, ChevronUp, Copy } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 
 type ScanState =
   | { stage: "idle"; pageUrl: string | null; pageTitle: string | null }
@@ -642,9 +643,70 @@ function ViolationDetail({ violation }: { violation: ProcessedViolation }) {
       )}
       {ai.stage === "ready" && (
         <div className="flex flex-col gap-2">
-          <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-sm bg-background p-2 text-[11px]">
-            {ai.markdown}
-          </pre>
+          <div className="max-h-72 overflow-auto rounded-sm bg-background p-2 text-[11px] leading-relaxed">
+            <ReactMarkdown
+              components={{
+                p: ({ children }) => <p className="my-1.5">{children}</p>,
+                strong: ({ children }) => (
+                  <strong className="font-semibold text-foreground">{children}</strong>
+                ),
+                em: ({ children }) => <em className="italic">{children}</em>,
+                ul: ({ children }) => (
+                  <ul className="my-1 ml-4 list-disc">{children}</ul>
+                ),
+                ol: ({ children }) => (
+                  <ol className="my-1 ml-4 list-decimal">{children}</ol>
+                ),
+                li: ({ children }) => <li className="my-0.5">{children}</li>,
+                h1: ({ children }) => (
+                  <h3 className="mt-2 mb-1 text-xs font-semibold">{children}</h3>
+                ),
+                h2: ({ children }) => (
+                  <h3 className="mt-2 mb-1 text-xs font-semibold">{children}</h3>
+                ),
+                h3: ({ children }) => (
+                  <h3 className="mt-2 mb-1 text-xs font-semibold">{children}</h3>
+                ),
+                code: ({ className, children, ...props }) => {
+                  // Block vs inline: react-markdown uses className
+                  // (e.g. "language-html") on block code; inline has none.
+                  const isBlock = /language-/.test(className ?? "");
+                  if (isBlock) {
+                    return (
+                      <code className={`block ${className ?? ""}`} {...props}>
+                        {children}
+                      </code>
+                    );
+                  }
+                  return (
+                    <code
+                      className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[10px]"
+                      {...props}
+                    >
+                      {children}
+                    </code>
+                  );
+                },
+                pre: ({ children }) => (
+                  <pre className="my-1.5 overflow-x-auto rounded-sm bg-muted p-2 font-mono text-[10px] leading-snug">
+                    {children}
+                  </pre>
+                ),
+                a: ({ href, children }) => (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary underline"
+                  >
+                    {children}
+                  </a>
+                ),
+              }}
+            >
+              {ai.markdown}
+            </ReactMarkdown>
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
