@@ -23,7 +23,7 @@ import {
   scanErrorMessage,
 } from "@/lib/messages";
 import { uploadScan, aiFix, startCrawl } from "@/lib/api";
-import { getAuth, getSettings } from "@/lib/storage";
+import { getAuth, getSettings, getRecentScans } from "@/lib/storage";
 import { Sparkles, ChevronDown, ChevronUp, Copy, Crosshair } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { prettyHtml } from "@/lib/pretty-html";
@@ -49,17 +49,42 @@ export function Popup() {
     pageTitle: null,
   });
 
-  // Fetch current tab on mount.
+  // Hydrate from storage on mount. If we already have a stored
+  // scan for the active tab's URL, jump straight to the ready
+  // state — opening the popup after the user dismissed it (e.g.
+  // because they hit Esc, clicked the highlight button, or just
+  // glanced away) shouldn't drop them back to the empty "Scan
+  // this page" screen.
   useEffect(() => {
     void (async () => {
       const [tab] = await chrome.tabs.query({
         active: true,
         currentWindow: true,
       });
+      const url = tab?.url ?? null;
+      const title = tab?.title ?? null;
+
+      if (url) {
+        const recent = await getRecentScans(20);
+        const match = recent.find((s) => s.url === url);
+        if (match) {
+          setScan({
+            stage: "ready",
+            pageUrl: match.url,
+            pageTitle: match.pageTitle,
+            durationMs: match.durationMs,
+            score: match.score,
+            counts: match.counts,
+            violations: match.violations,
+          });
+          return;
+        }
+      }
+
       setScan({
         stage: "idle",
-        pageUrl: tab?.url ?? null,
-        pageTitle: tab?.title ?? null,
+        pageUrl: url,
+        pageTitle: title,
       });
     })();
   }, []);
@@ -496,12 +521,14 @@ function HighlightButton({
         label: label?.slice(0, 80),
       });
       setState("ok");
-      // Auto-close the popup so the highlight on the page is visible.
-      // Without this, the popup stays open over the page and the
-      // overlay is mostly hidden behind it.
-      setTimeout(() => window.close(), 150);
+      // Briefly flash the "ok" state then revert so the user can
+      // click again to re-highlight (the in-page overlay self-
+      // dismisses after 3.5s). Popup stays open — closing it is
+      // up to the user.
+      setTimeout(() => setState("idle"), 1200);
     } catch {
       setState("fail");
+      setTimeout(() => setState("idle"), 1500);
     }
   };
 
@@ -511,12 +538,16 @@ function HighlightButton({
       onClick={trigger}
       title="Highlight on page"
       aria-label="Highlight this element on the page"
-      className={`inline-flex items-center gap-1 rounded-sm border border-border px-1 py-0.5 text-[10px] hover:bg-muted ${
-        state === "fail" ? "text-red-600 dark:text-red-400" : ""
+      className={`inline-flex items-center gap-1 rounded-sm border px-1 py-0.5 text-[10px] hover:bg-muted ${
+        state === "fail"
+          ? "border-red-300 text-red-600 dark:border-red-800 dark:text-red-400"
+          : state === "ok"
+            ? "border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-400"
+            : "border-border"
       }`}
     >
       <Crosshair className="h-3 w-3" aria-hidden />
-      Show
+      {state === "ok" ? "On page" : state === "fail" ? "Failed" : "Show"}
     </button>
   );
 }
