@@ -28,6 +28,23 @@ export const runScanCommand = z.object({
 });
 export type RunScanCommand = z.infer<typeof runScanCommand>;
 
+export const highlightNodeCommand = z.object({
+  type: z.literal("scan/highlight"),
+  selector: z.string().min(1).max(2000),
+  label: z.string().max(160).optional(),
+});
+export type HighlightNodeCommand = z.infer<typeof highlightNodeCommand>;
+
+// ── Popup → Background ────────────────────────────────────────────
+
+export const highlightNodeRequest = z.object({
+  type: z.literal("highlight/start"),
+  tabId: z.number().int().nonnegative(),
+  selector: z.string().min(1).max(2000),
+  label: z.string().max(160).optional(),
+});
+export type HighlightNodeRequest = z.infer<typeof highlightNodeRequest>;
+
 // ── Content script → Background ───────────────────────────────────
 
 export const scanResultMessage = z.object({
@@ -80,5 +97,7 @@ export const allMessagesSchema = z.discriminatedUnion("type", [
   scanResultMessage,
   scanErrorMessage,
   authLinkMessage,
+  highlightNodeCommand,
+  highlightNodeRequest,
 ]);
 export type AllMessages = z.infer<typeof allMessagesSchema>;

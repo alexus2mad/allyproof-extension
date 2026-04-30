@@ -18,6 +18,7 @@ import {
   scanResultMessage,
   scanErrorMessage,
   authLinkMessage,
+  highlightNodeRequest,
 } from "@/lib/messages";
 import { appendScan, setAuth } from "@/lib/storage";
 import { badgeColor } from "@/lib/scoring";
@@ -100,6 +101,25 @@ chrome.runtime.onMessage.addListener((raw, sender, sendResponse) => {
   const link = authLinkMessage.safeParse(raw);
   if (link.success && sender.url && /^https:\/\/(.*\.)?allyproof\.com\//.test(sender.url)) {
     void setAuth(link.data.tokens);
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  // Popup → "highlight this selector on tab X". Forward to the
+  // tab's content script. Returning true keeps the message channel
+  // open for the async sendResponse from the content side.
+  const hl = highlightNodeRequest.safeParse(raw);
+  if (hl.success) {
+    void chrome.tabs
+      .sendMessage(hl.data.tabId, {
+        type: "scan/highlight",
+        selector: hl.data.selector,
+        label: hl.data.label,
+      })
+      .catch(() => {
+        /* tab might be on a non-injected origin; the popup will
+           surface a soft error message via the resolved value */
+      });
     sendResponse({ ok: true });
     return true;
   }

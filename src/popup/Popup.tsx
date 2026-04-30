@@ -24,7 +24,7 @@ import {
 } from "@/lib/messages";
 import { uploadScan, aiFix, startCrawl } from "@/lib/api";
 import { getAuth, getSettings } from "@/lib/storage";
-import { Sparkles, ChevronDown, ChevronUp, Copy } from "lucide-react";
+import { Sparkles, ChevronDown, ChevronUp, Copy, Crosshair } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { prettyHtml } from "@/lib/pretty-html";
 
@@ -422,6 +422,7 @@ function ViolationRow({ violation }: { violation: ProcessedViolation }) {
         : violation.impact === "moderate"
           ? "text-amber-600 dark:text-amber-400"
           : "text-muted-foreground";
+  const firstSelector = violation.nodes[0]?.target?.[0] ?? "";
   return (
     <li className="rounded-md border border-border bg-card text-xs">
       <button
@@ -440,17 +441,25 @@ function ViolationRow({ violation }: { violation: ProcessedViolation }) {
             {violation.wcagCriteria.length > 0 && (
               <span>· SC {violation.wcagCriteria.join(", ")}</span>
             )}
-            {violation.helpUrl && (
-              <a
-                href={violation.helpUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                className="ml-auto inline-flex items-center gap-1 text-primary hover:underline"
-              >
-                Docs <ExternalLink className="h-3 w-3" aria-hidden />
-              </a>
-            )}
+            <span className="ml-auto inline-flex items-center gap-2">
+              {firstSelector && (
+                <HighlightButton
+                  selector={firstSelector}
+                  label={violation.help || violation.ruleId}
+                />
+              )}
+              {violation.helpUrl && (
+                <a
+                  href={violation.helpUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 text-primary hover:underline"
+                >
+                  Docs <ExternalLink className="h-3 w-3" aria-hidden />
+                </a>
+              )}
+            </span>
           </div>
         </div>
         {expanded ? (
@@ -461,6 +470,54 @@ function ViolationRow({ violation }: { violation: ProcessedViolation }) {
       </button>
       {expanded && <ViolationDetail violation={violation} />}
     </li>
+  );
+}
+
+function HighlightButton({
+  selector,
+  label,
+}: {
+  selector: string;
+  label?: string;
+}) {
+  const [state, setState] = useState<"idle" | "ok" | "fail">("idle");
+
+  const trigger = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id == null) {
+      setState("fail");
+      return;
+    }
+    try {
+      await chrome.tabs.sendMessage(tab.id, {
+        type: "scan/highlight",
+        selector,
+        label: label?.slice(0, 80),
+      });
+      setState("ok");
+      // Auto-close the popup so the highlight on the page is visible.
+      // Without this, the popup stays open over the page and the
+      // overlay is mostly hidden behind it.
+      setTimeout(() => window.close(), 150);
+    } catch {
+      setState("fail");
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={trigger}
+      title="Highlight on page"
+      aria-label="Highlight this element on the page"
+      className={`inline-flex items-center gap-1 rounded-sm border border-border px-1 py-0.5 text-[10px] hover:bg-muted ${
+        state === "fail" ? "text-red-600 dark:text-red-400" : ""
+      }`}
+    >
+      <Crosshair className="h-3 w-3" aria-hidden />
+      Show
+    </button>
   );
 }
 
