@@ -26,6 +26,7 @@ import { uploadScan, aiFix, startCrawl } from "@/lib/api";
 import { getAuth, getSettings } from "@/lib/storage";
 import { Sparkles, ChevronDown, ChevronUp, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { prettyHtml } from "@/lib/pretty-html";
 
 type ScanState =
   | { stage: "idle"; pageUrl: string | null; pageTitle: string | null }
@@ -605,8 +606,8 @@ function ViolationDetail({ violation }: { violation: ProcessedViolation }) {
           <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground">
             Failing HTML
           </summary>
-          <pre className="mt-1 max-h-32 overflow-auto rounded-sm bg-background p-2 text-[11px]">
-            <code>{node.html}</code>
+          <pre className="mt-1 whitespace-pre-wrap break-all rounded-sm bg-background p-2 font-mono text-[10px] leading-snug">
+            <code>{prettyHtml(node.html)}</code>
           </pre>
         </details>
       )}
@@ -643,7 +644,7 @@ function ViolationDetail({ violation }: { violation: ProcessedViolation }) {
       )}
       {ai.stage === "ready" && (
         <div className="flex flex-col gap-2">
-          <div className="max-h-72 overflow-auto rounded-sm bg-background p-2 text-[11px] leading-relaxed">
+          <div className="rounded-sm bg-background p-2 text-[11px] leading-relaxed">
             <ReactMarkdown
               components={{
                 p: ({ children }) => <p className="my-1.5">{children}</p>,
@@ -668,13 +669,20 @@ function ViolationDetail({ violation }: { violation: ProcessedViolation }) {
                   <h3 className="mt-2 mb-1 text-xs font-semibold">{children}</h3>
                 ),
                 code: ({ className, children, ...props }) => {
-                  // Block vs inline: react-markdown uses className
-                  // (e.g. "language-html") on block code; inline has none.
+                  // Block vs inline: react-markdown adds a
+                  // language-* className on block code; inline has none.
                   const isBlock = /language-/.test(className ?? "");
                   if (isBlock) {
+                    // Pretty-print HTML so long opening tags wrap
+                    // onto multiple lines naturally — kills the
+                    // horizontal scroll that made the drawer
+                    // unreadable on a 400 px popup.
+                    const text = String(children).replace(/\n$/, "");
+                    const isHtml = /language-html/.test(className ?? "");
+                    const formatted = isHtml ? prettyHtml(text) : text;
                     return (
                       <code className={`block ${className ?? ""}`} {...props}>
-                        {children}
+                        {formatted}
                       </code>
                     );
                   }
@@ -688,7 +696,7 @@ function ViolationDetail({ violation }: { violation: ProcessedViolation }) {
                   );
                 },
                 pre: ({ children }) => (
-                  <pre className="my-1.5 overflow-x-auto rounded-sm bg-muted p-2 font-mono text-[10px] leading-snug">
+                  <pre className="my-1.5 whitespace-pre-wrap break-all rounded-sm bg-muted p-2 font-mono text-[10px] leading-snug">
                     {children}
                   </pre>
                 ),
