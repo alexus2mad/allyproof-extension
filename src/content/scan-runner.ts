@@ -116,15 +116,6 @@ function clearHighlight() {
   }
 }
 
-function isInViewport(rect: DOMRect): boolean {
-  return (
-    rect.top >= 0 &&
-    rect.left >= 0 &&
-    rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
-    rect.right <= (window.innerWidth || document.documentElement.clientWidth)
-  );
-}
-
 function drawOverlay(target: Element, label?: string): void {
   const rect = target.getBoundingClientRect();
   clearHighlight();
@@ -205,40 +196,58 @@ function highlightSelector(selector: string, label?: string): boolean {
   }
   if (!(target instanceof Element)) return false;
 
-  // Fast path: element is already on screen — draw immediately,
-  // no scroll, no waiting.
-  if (isInViewport(target.getBoundingClientRect())) {
-    drawOverlay(target, label);
-    return true;
-  }
-
-  // Slow path: scroll into view, then draw AFTER scroll settles.
-  // Previously we used a fixed 220ms timeout, but smooth scroll
-  // on long pages takes 500-1000ms+ — drawing mid-scroll left the
-  // overlay anchored to mid-scroll viewport coords (off-screen by
-  // the time scroll completed), which manifested as "highlight
-  // doesn't appear unless I click Show again."
-  //
-  // scrollend (Chrome 114+) is the right event: fires once after
-  // smooth scroll finishes. We also arm a generous timeout
-  // fallback in case scrollend never fires (rare — happens when
-  // a CSS scroll-snap intervenes mid-flight, or on engines that
-  // skip smooth scroll for prefers-reduced-motion).
+  // Kick off the scroll. scrollIntoView is a no-op if the element
+  // is already centred, so we don't need a fast-path branch.
   target.scrollIntoView({ behavior: "smooth", block: "center" });
 
-  let drawn = false;
-  const drawOnce = () => {
-    if (drawn) return;
-    drawn = true;
-    document.removeEventListener("scrollend", drawOnce);
-    drawOverlay(target!, label);
+  // Poll the element's position frame-by-frame and only draw the
+  // overlay once it has stopped moving. scrollend is unreliable
+  // here — on long smooth-scrolls Chrome fires it before the
+  // animation actually finishes (especially when nested scroll
+  // containers are involved or scroll-snap intercedes). The
+  // poll is the only approach that works in all cases:
+  //   - already-in-view: stable from frame 1, draws within ~67ms
+  //   - smooth scroll in flight: position changing each frame,
+  //     keep waiting
+  //   - scroll-snap interruption: eventually settles, then draws
+  //
+  // getBoundingClientRect is one of the cheapest DOM reads; a
+  // poll over a few frames is well below the rendering budget
+  // and bounded by MAX_WAIT_MS so we can never spin forever.
+  const STABLE_FRAMES_REQUIRED = 4;
+  const MAX_WAIT_MS = 3000;
+  let lastTop = Number.NEGATIVE_INFINITY;
+  let lastLeft = Number.NEGATIVE_INFINITY;
+  let stableCount = 0;
+  const startedAt = performance.now();
+
+  const tick = () => {
+    const rect = target!.getBoundingClientRect();
+    if (
+      Math.abs(rect.top - lastTop) < 0.5 &&
+      Math.abs(rect.left - lastLeft) < 0.5
+    ) {
+      stableCount++;
+      if (stableCount >= STABLE_FRAMES_REQUIRED) {
+        drawOverlay(target!, label);
+        return;
+      }
+    } else {
+      stableCount = 0;
+      lastTop = rect.top;
+      lastLeft = rect.left;
+    }
+    if (performance.now() - startedAt > MAX_WAIT_MS) {
+      // Ceiling — draw at current position rather than spinning
+      // forever (some pages have continuous animation that never
+      // settles).
+      drawOverlay(target!, label);
+      return;
+    }
+    requestAnimationFrame(tick);
   };
 
-  document.addEventListener("scrollend", drawOnce, { once: true });
-  // Fallback: 1.2s is generous for smooth scroll on long pages
-  // and bounded enough that the user perceives it as snappy.
-  window.setTimeout(drawOnce, 1200);
-
+  requestAnimationFrame(tick);
   return true;
 }
 
