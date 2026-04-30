@@ -102,18 +102,18 @@ chrome.runtime.onMessage.addListener((raw, sender, sendResponse) => {
   if (link.success && sender.url && /^https:\/\/(.*\.)?allyproof\.com\//.test(sender.url)) {
     void (async () => {
       await setAuth(link.data.tokens);
-      // Refocus the tab the user was on when they clicked Sign in,
-      // then close the /extension-link tab. The short delay lets
-      // the page render its "Linked successfully" pill so the
-      // user has visual confirmation before the tab disappears.
-      const linkTabId = sender.tab?.id;
+      // Refocus the tab the user was on when they clicked Sign in.
+      // We do NOT close the link tab from here: chrome.tabs.remove
+      // on a tab that has the side panel currently bound to it
+      // collapses the side panel for the whole window (Chromium
+      // quirk — the panel re-evaluates options on tab removal and
+      // closes if its association is gone). Letting the page show
+      // a "you can close this tab" hint avoids the disappearing-
+      // sidebar bug; the user's tab clutter is one cmd-W away.
       const returnTabId = link.data.returnTabId;
       setTimeout(() => {
         if (returnTabId != null) {
           void chrome.tabs.update(returnTabId, { active: true }).catch(() => {});
-        }
-        if (linkTabId != null) {
-          void chrome.tabs.remove(linkTabId).catch(() => {});
         }
       }, 700);
     })();
