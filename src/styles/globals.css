@@ -72,4 +72,20 @@ html, body {
   min-width: 400px;
   min-height: 480px;
   max-width: 600px;
+  transition: opacity 180ms ease;
+}
+
+/**
+ * Popup goes near-invisible after the user clicks "Show" so the
+ * in-page highlight overlay isn't obscured. The body re-enters
+ * full opacity on any pointer move/click — the popup snaps back
+ * the moment the user's attention returns to it.
+ *
+ * pointer-events:none on the dimmed state prevents accidental
+ * button clicks while the user is looking at the page; html-level
+ * mouseenter re-engages first via JS, restoring interactivity.
+ */
+#popup-root.allyproof-dimmed {
+  opacity: 0.08;
+  pointer-events: none;
 }
