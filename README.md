@@ -64,7 +64,8 @@ Listing copy, permission justifications, screenshot checklist, and the per-store
 
 Minimal by design:
 
-- `activeTab` — read the active tab on user click. NOT `<all_urls>`.
+- `activeTab` — inject the scanner into the active tab on user click. NOT `<all_urls>` host access.
+- `tabs` — read tab URL/title across tabs so the side panel can show the current tab's scan when the user switches tabs. Tab metadata only — no DOM access.
 - `storage` — local + session buckets for tokens and scan history. Never `sync` (would push tokens cross-device).
 - `sidePanel` — open the in-browser results panel.
 

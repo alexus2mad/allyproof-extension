@@ -68,14 +68,20 @@ export default defineManifest({
     },
   ],
   // activeTab — granted on user click of the toolbar action. Lets
-  // the popup read the active tab's url + title without a blanket
-  // host permission. Auto-revoked when the user navigates or
-  // closes the tab. tabs WITHOUT activeTab would also work but
-  // surfaces a noisier "Read your browsing history" warning.
+  // the popup inject the scanner into the active tab without a
+  // blanket host permission. Auto-revoked when the user navigates
+  // or closes the tab.
+  // tabs — needed for the side panel to read tab.url + tab.title
+  // when the user switches tabs. activeTab alone hides those fields
+  // for any tab the user didn't click the toolbar icon on, which
+  // breaks the panel's "show me the scan for whatever tab I'm
+  // looking at" UX. tabs grants tab metadata across all tabs but
+  // grants NO host access — we still can't read DOM without an
+  // activeTab gesture. Same scope axe DevTools / WAVE request.
   // sidePanel — required by chrome.sidePanel.open() (Chrome 116+),
   // which the popup calls when the user clicks "Show on page" so
   // results stay visible alongside the highlighted element.
-  permissions: ["storage", "activeTab", "sidePanel"],
+  permissions: ["storage", "activeTab", "tabs", "sidePanel"],
   // No host_permissions array — the matches list above is the
   // origin grant the content script needs. Crawl-mode scans run
   // server-side via /api/v1/scan; the server fetches pages, not

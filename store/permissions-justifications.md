@@ -13,6 +13,21 @@ browser on user gesture and revoked when the user navigates away or
 closes the tab. Without `activeTab`, the extension cannot inject the
 axe-core scanner into the page the user is asking us to audit.
 
+## `tabs`
+
+The side panel surface persists across tab switches. To show "scan
+results for the tab you're currently viewing" — including the page
+title and URL header in the panel — the extension needs to read
+`tab.url` and `tab.title` for the active tab as the user moves between
+tabs. `activeTab` alone hides those fields for tabs the user hasn't
+explicitly granted, which breaks the core UX of the panel.
+
+`tabs` grants tab metadata only (URL, title, favicon, status). It does
+not grant host access — the extension still cannot read the page DOM
+or run scripts in any tab without an `activeTab` user gesture.
+This is the same permission scope used by axe DevTools, WAVE, and
+Lighthouse extensions for the same reason.
+
 ## `storage`
 
 The extension uses `chrome.storage.local` and `chrome.storage.session`
