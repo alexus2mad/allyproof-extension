@@ -6,16 +6,9 @@ Manifest V3. Chrome / Edge / Firefox. MIT-licensed.
 
 ## Status
 
-Phase 1 MVP scaffold. Working surface: local single-page quick-scan via axe-core, popup UI with score + severity breakdown + top 5 violations, toolbar badge.
+1.0.0 — store-ready. Single-page quick-scan via axe-core, action-popup with score + severity breakdown, side-panel surface with the full violation list, four dock modes (right, left, bottom, detached), toolbar badge with live violation count, "Show on page" highlights. Sign-in unlocks save-to-dashboard, AI fix suggestions, multi-page crawl, and DRAFT VPAT export.
 
-In flight:
-- Magic-link sign-in flow + token storage
-- Save-to-dashboard sync against the AllyProof platform
-- Site crawl via the hosted backend
-- AI fix drawer
-- DRAFT VPAT export
-
-See `../workspace/007-extension-plan.md` for the full strategic + implementation plan.
+See `../workspace/007-extension-plan.md` for the broader strategic + implementation plan.
 
 ## Architecture
 
@@ -52,7 +45,20 @@ npm run build         # Chrome / Edge
 npm run build:firefox # Firefox (browser_specific_settings)
 ```
 
-Output in `dist/`. For Chrome Web Store / Edge Add-ons submission, zip `dist/` and upload.
+Output in `dist/`. Loadable directly via `chrome://extensions` → "Load unpacked".
+
+## Release (store-ready zips)
+
+```bash
+npm run release:chrome    # → release/allyproof-chrome-v{X.Y.Z}.zip
+npm run release:firefox   # → release/allyproof-firefox-v{X.Y.Z}.zip
+npm run release:source    # → release/allyproof-source-v{X.Y.Z}.zip  (Mozilla AMO requirement)
+npm run release:all       # all three in one shot
+```
+
+Each release script does a clean rebuild, verifies the manifest version matches `package.json`, strips `.map` files, and writes the artifact to `release/`. The Chrome zip works for both Chrome Web Store and Microsoft Edge Add-ons. The Firefox zip + source zip pair is what AMO needs.
+
+Listing copy, permission justifications, screenshot checklist, and the per-store submission flow live under `store/`. See `store/README.md`.
 
 ## Permissions
 
@@ -60,7 +66,7 @@ Minimal by design:
 
 - `activeTab` — read the active tab on user click. NOT `<all_urls>`.
 - `storage` — local + session buckets for tokens and scan history. Never `sync` (would push tokens cross-device).
-- `scripting` — programmatic content-script injection on user click.
+- `sidePanel` — open the in-browser results panel.
 
 ## License
 

@@ -19,10 +19,111 @@ import {
   scanErrorMessage,
   authLinkMessage,
   highlightNodeRequest,
+  openDetachedPanelRequest,
+  closeDetachedPanelRequest,
 } from "@/lib/messages";
-import { appendScan, setAuth } from "@/lib/storage";
-import { badgeColor } from "@/lib/scoring";
+import {
+  appendScan,
+  setAuth,
+  getPanelWindowId,
+  setPanelWindowId,
+} from "@/lib/storage";
+import { badgeColorForCounts } from "@/lib/scoring";
+import { totalIssueCount } from "@allyproof/scan-core";
 import type { ScanResultMessage } from "@/lib/messages";
+
+const PANEL_PATH = "src/sidepanel/index.html";
+
+/**
+ * Compute the chrome.windows.create geometry for a detached panel
+ * mode. Pure function so it's trivially unit-testable later.
+ */
+function geometryFor(
+  mode: "left" | "bottom" | "detached",
+  screen: {
+    availLeft: number;
+    availTop: number;
+    availWidth: number;
+    availHeight: number;
+  }
+): { left: number; top: number; width: number; height: number } {
+  if (mode === "left") {
+    return {
+      left: screen.availLeft,
+      top: screen.availTop,
+      width: 440,
+      height: screen.availHeight,
+    };
+  }
+  if (mode === "bottom") {
+    return {
+      left: screen.availLeft,
+      top: screen.availTop + screen.availHeight - 340,
+      width: screen.availWidth,
+      height: 340,
+    };
+  }
+  // detached — centered-ish, comfortable inspector size
+  const width = 460;
+  const height = Math.min(760, screen.availHeight - 80);
+  return {
+    left: screen.availLeft + Math.round((screen.availWidth - width) / 2),
+    top: screen.availTop + Math.round((screen.availHeight - height) / 3),
+    width,
+    height,
+  };
+}
+
+/**
+ * Close the currently-tracked detached panel window. No-op if none
+ * is tracked or the id is stale (window already closed manually).
+ */
+async function closeDetachedPanel(): Promise<void> {
+  const id = await getPanelWindowId();
+  if (id == null) return;
+  await chrome.windows.remove(id).catch(() => {
+    /* already closed */
+  });
+  await setPanelWindowId(null);
+}
+
+async function openDetachedPanel(
+  mode: "left" | "bottom" | "detached",
+  screen: {
+    availLeft: number;
+    availTop: number;
+    availWidth: number;
+    availHeight: number;
+  }
+): Promise<void> {
+  // If a detached panel is already open, focus + reposition it
+  // instead of spawning a duplicate. Mode might have changed, so
+  // also update the bounds.
+  const existingId = await getPanelWindowId();
+  if (existingId != null) {
+    const bounds = geometryFor(mode, screen);
+    try {
+      await chrome.windows.update(existingId, {
+        ...bounds,
+        focused: true,
+        state: "normal",
+      });
+      return;
+    } catch {
+      // window was closed out from under us — fall through to create
+      await setPanelWindowId(null);
+    }
+  }
+
+  const bounds = geometryFor(mode, screen);
+  const win = await chrome.windows.create({
+    url: chrome.runtime.getURL(PANEL_PATH),
+    type: "popup",
+    focused: true,
+    ...bounds,
+  });
+  if (win?.id != null) await setPanelWindowId(win.id);
+}
 
 async function injectAndScan(tabId: number): Promise<void> {
   // The content script is auto-injected on http(s) pages by the
@@ -34,12 +135,20 @@ async function injectAndScan(tabId: number): Promise<void> {
   await chrome.tabs.sendMessage(tabId, { type: "scan/run" });
 }
 
-async function setBadgeForTab(tabId: number, score: number): Promise<void> {
-  const text = score >= 100 ? "100" : `${score}`;
+async function setBadgeForTab(
+  tabId: number,
+  counts: ScanResultMessage["counts"]
+): Promise<void> {
+  // Badge shows the violation count, not the score — operators
+  // care most about "how many issues" at-a-glance. Badge text is
+  // capped at ~4 visible chars in Chrome's renderer, so 999+ once
+  // a page hits four digits.
+  const total = totalIssueCount(counts);
+  const text = total === 0 ? "" : total > 999 ? "999+" : String(total);
   await chrome.action.setBadgeText({ tabId, text });
   await chrome.action.setBadgeBackgroundColor({
     tabId,
-    color: badgeColor(score),
+    color: badgeColorForCounts(counts),
   });
 }
 
@@ -69,7 +178,7 @@ chrome.runtime.onMessage.addListener((raw, sender, sendResponse) => {
     const tabId = sender.tab.id;
     const r = result.data as ScanResultMessage;
     void (async () => {
-      await setBadgeForTab(tabId, r.score);
+      await setBadgeForTab(tabId, r.counts);
       await appendScan({
         id: crypto.randomUUID(),
         url: r.url,
@@ -121,6 +230,26 @@ chrome.runtime.onMessage.addListener((raw, sender, sendResponse) => {
     return true;
   }
 
+  // Open the panel surface in left/bottom/detached mode (a popup
+  // window). Right-mode is opened directly from the click context
+  // because chrome.sidePanel.open() requires a user gesture and
+  // gestures don't survive runtime message-passing.
+  const openDet = openDetachedPanelRequest.safeParse(raw);
+  if (openDet.success) {
+    void openDetachedPanel(openDet.data.mode, openDet.data.screen);
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  // Close the tracked detached panel window (used when switching
+  // back to native right-dock).
+  const closeDet = closeDetachedPanelRequest.safeParse(raw);
+  if (closeDet.success) {
+    void closeDetachedPanel();
+    sendResponse({ ok: true });
+    return true;
+  }
+
   // Popup → "highlight this selector on tab X". Forward to the
   // tab's content script. Returning true keeps the message channel
   // open for the async sendResponse from the content side.
@@ -149,6 +278,17 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.status === "loading") {
     void chrome.action.setBadgeText({ tabId, text: "" });
   }
+});
+
+// Clear the tracked panel-window id when the user closes it
+// manually. Without this the next "open detached" would try to
+// focus a stale id, fail, recreate — extra work and a visible
+// flicker.
+chrome.windows.onRemoved.addListener((windowId) => {
+  void (async () => {
+    const tracked = await getPanelWindowId();
+    if (tracked === windowId) await setPanelWindowId(null);
+  })();
 });
 
 export {};

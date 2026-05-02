@@ -13,7 +13,19 @@
  */
 
 import { useEffect, useState } from "react";
-import { ShieldCheck, Loader2, AlertCircle, ExternalLink, Cloud, Check } from "lucide-react";
+import {
+  ShieldCheck,
+  Loader2,
+  AlertCircle,
+  ExternalLink,
+  Cloud,
+  Check,
+  PanelRight,
+  PanelLeft,
+  PanelBottom,
+  PictureInPicture2,
+  ListChecks,
+} from "lucide-react";
 import type { ProcessedViolation, SeverityCounts } from "@allyproof/scan-core";
 import { totalIssueCount } from "@allyproof/scan-core";
 import { scoreColorClasses } from "@/lib/scoring";
@@ -21,13 +33,22 @@ import {
   startScanRequest,
   scanResultMessage,
   scanErrorMessage,
+  openDetachedPanelRequest,
+  closeDetachedPanelRequest,
 } from "@/lib/messages";
 import { uploadScan, aiFix, startCrawl } from "@/lib/api";
-import { getAuth, getSettings, getRecentScans } from "@/lib/storage";
+import {
+  getAuth,
+  getSettings,
+  setSettings,
+  getRecentScans,
+  type DockMode,
+} from "@/lib/storage";
 import { useAuth } from "@/hooks/use-auth";
 import { Sparkles, ChevronDown, ChevronUp, Copy, Crosshair } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { prettyHtml } from "@/lib/pretty-html";
+import { getTargetTab } from "@/lib/active-tab";
 
 type ScanState =
   | { stage: "idle"; pageUrl: string | null; pageTitle: string | null }
@@ -43,12 +64,75 @@ type ScanState =
     }
   | { stage: "error"; pageUrl: string | null; message: string };
 
+/**
+ * Surface detection — the same React tree mounts in three places:
+ *   1. action popup (src/popup/index.html)         → /popup/
+ *   2. native side panel (src/sidepanel/index.html) → /sidepanel/
+ *   3. detached popup window (also sidepanel HTML)  → /sidepanel/
+ *
+ * Pathname distinguishes the action popup from the panel surfaces.
+ * To tell apart side-panel vs detached popup-window we check
+ * chrome.windows.getCurrent().type — only known asynchronously, so
+ * the panel surface defaults to "panel" and refines once known.
+ */
+function isPanelSurface(): boolean {
+  return /\/sidepanel\//.test(window.location.pathname);
+}
+
+/**
+ * window.screen.availLeft/availTop are non-standard (multi-monitor
+ * extensions) and missing from the lib.dom Screen type. They're
+ * implemented in Chromium and meaningful for positioning a popup
+ * window on the correct display, so we read them defensively.
+ */
+function readScreenBounds(): {
+  availLeft: number;
+  availTop: number;
+  availWidth: number;
+  availHeight: number;
+} {
+  const s = window.screen as Screen & {
+    availLeft?: number;
+    availTop?: number;
+  };
+  return {
+    availLeft: typeof s.availLeft === "number" ? s.availLeft : 0,
+    availTop: typeof s.availTop === "number" ? s.availTop : 0,
+    availWidth: s.availWidth,
+    availHeight: s.availHeight,
+  };
+}
+
+type SurfaceKind = "popup" | "panel-right" | "panel-detached";
+
+function useSurfaceKind(): SurfaceKind {
+  const [kind, setKind] = useState<SurfaceKind>(
+    isPanelSurface() ? "panel-right" : "popup"
+  );
+  useEffect(() => {
+    if (!isPanelSurface()) return;
+    void (async () => {
+      try {
+        const win = await chrome.windows.getCurrent();
+        // type "popup" = chrome.windows.create({type:"popup"}) i.e.
+        // our left/bottom/detached surface. type "normal" = the host
+        // browser window the side panel is docked to.
+        setKind(win.type === "popup" ? "panel-detached" : "panel-right");
+      } catch {
+        /* keep default */
+      }
+    })();
+  }, []);
+  return kind;
+}
+
 export function Popup() {
   const [scan, setScan] = useState<ScanState>({
     stage: "idle",
     pageUrl: null,
     pageTitle: null,
   });
+  const surface = useSurfaceKind();
 
   // Hydrate from storage on mount. If we already have a stored
   // scan for the active tab's URL, jump straight to the ready
@@ -58,10 +142,7 @@ export function Popup() {
   // this page" screen.
   useEffect(() => {
     void (async () => {
-      const [tab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
-      });
+      const tab = await getTargetTab();
       const url = tab?.url ?? null;
       const title = tab?.title ?? null;
 
@@ -122,10 +203,7 @@ export function Popup() {
   }, []);
 
   const startScan = async () => {
-    const [tab] = await chrome.tabs.query({
-      active: true,
-      currentWindow: true,
-    });
+    const tab = await getTargetTab();
     if (tab?.id == null || !tab.url) return;
     setScan({
       stage: "scanning",
@@ -139,7 +217,7 @@ export function Popup() {
 
   return (
     <div className="flex min-h-[480px] flex-col gap-3 p-4">
-      <Header />
+      <Header surface={surface} />
       {scan.stage === "idle" && (
         <IdleView
           pageUrl={scan.pageUrl}
@@ -151,7 +229,7 @@ export function Popup() {
         <ScanningView pageTitle={scan.pageTitle} pageUrl={scan.pageUrl} />
       )}
       {scan.stage === "ready" && (
-        <ResultView scan={scan} onRescan={startScan} />
+        <ResultView scan={scan} surface={surface} onRescan={startScan} />
       )}
       {scan.stage === "error" && (
         <ErrorView message={scan.message} onRetry={startScan} />
@@ -161,12 +239,139 @@ export function Popup() {
   );
 }
 
-function Header() {
+function Header({ surface }: { surface: SurfaceKind }) {
   return (
     <div className="flex items-center gap-2 border-b border-border pb-3">
       <ShieldCheck className="h-5 w-5 text-primary" aria-hidden />
       <h1 className="text-base font-semibold">AllyProof</h1>
-      <span className="ml-auto text-xs text-muted-foreground">WCAG 2.2 AA</span>
+      {surface !== "popup" ? (
+        <DockModeSwitcher className="ml-auto" />
+      ) : (
+        <span className="ml-auto text-xs text-muted-foreground">
+          WCAG 2.2 AA
+        </span>
+      )}
+    </div>
+  );
+}
+
+const DOCK_OPTIONS: ReadonlyArray<{
+  mode: DockMode;
+  label: string;
+  Icon: typeof PanelRight;
+}> = [
+  { mode: "right", label: "Dock right", Icon: PanelRight },
+  { mode: "left", label: "Dock left", Icon: PanelLeft },
+  { mode: "bottom", label: "Dock bottom", Icon: PanelBottom },
+  { mode: "detached", label: "Detach window", Icon: PictureInPicture2 },
+];
+
+function DockModeSwitcher({ className }: { className?: string }) {
+  const [current, setCurrent] = useState<DockMode | null>(null);
+
+  // Lazy-read on mount; don't render anything until we know the
+  // current mode so the active state is honest.
+  useEffect(() => {
+    void (async () => {
+      const s = await getSettings();
+      setCurrent(s.dockMode);
+    })();
+  }, []);
+
+  const switchTo = async (next: DockMode) => {
+    if (next === current) return;
+    await setSettings({ dockMode: next });
+    setCurrent(next);
+
+    if (next === "right") {
+      // Need a normal browser window to dock the side panel onto.
+      // From a detached popup window, getCurrent() returns the
+      // popup itself — fall back to the user's last-focused
+      // browser window. From the right-dock case the user is
+      // already there, so getCurrent() returns the host.
+      let hostWinId: number | undefined;
+      try {
+        const cur = await chrome.windows.getCurrent();
+        if (cur.type === "normal" && cur.id != null) {
+          hostWinId = cur.id;
+        } else {
+          const last = await chrome.windows.getLastFocused({
+            windowTypes: ["normal"],
+          });
+          hostWinId = last.id ?? undefined;
+        }
+      } catch {
+        /* no window — bail */
+      }
+      if (hostWinId == null) return;
+      try {
+        await chrome.sidePanel.setOptions({
+          path: "src/sidepanel/index.html",
+          enabled: true,
+        });
+        await chrome.sidePanel.open({ windowId: hostWinId });
+      } catch {
+        /* unsupported / denied — leave detached open as fallback */
+        return;
+      }
+      // Close any detached panel window. The current surface may
+      // *be* that window — closing it is fine; the side panel is
+      // already open at this point.
+      chrome.runtime.sendMessage(
+        closeDetachedPanelRequest.parse({ type: "panel/closeDetached" })
+      );
+      return;
+    }
+
+    // left / bottom / detached — handed off to the background. The
+    // service worker positions the popup window using the screen
+    // dims we measure here (background has no DOM).
+    chrome.runtime.sendMessage(
+      openDetachedPanelRequest.parse({
+        type: "panel/openDetached",
+        mode: next,
+        screen: readScreenBounds(),
+      })
+    );
+    // If we're switching from right-dock, hide the side panel so
+    // the user doesn't end up with both surfaces visible.
+    if (current === "right") {
+      try {
+        await chrome.sidePanel.setOptions({ enabled: false });
+      } catch {
+        /* no-op */
+      }
+    }
+  };
+
+  if (current == null) return null;
+
+  return (
+    <div
+      role="group"
+      aria-label="Panel position"
+      className={`inline-flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5 ${className ?? ""}`}
+    >
+      {DOCK_OPTIONS.map(({ mode, label, Icon }) => {
+        const active = mode === current;
+        return (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => void switchTo(mode)}
+            title={label}
+            aria-label={label}
+            aria-pressed={active}
+            className={`inline-flex h-6 w-6 items-center justify-center rounded-sm transition-colors ${
+              active
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted"
+            }`}
+          >
+            <Icon className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -249,17 +454,22 @@ function ScanningView({
 
 function ResultView({
   scan,
+  surface,
   onRescan,
 }: {
   scan: Extract<ScanState, { stage: "ready" }>;
+  surface: SurfaceKind;
   onRescan: () => void;
 }) {
   const colors = scoreColorClasses(scan.score);
   const total = totalIssueCount(scan.counts);
-  const top = scan.violations
+  const isPanel = surface !== "popup";
+  // Panel surfaces have room for the full list; the action popup
+  // is space-constrained and now hands off to the panel via the
+  // "Show all" button below.
+  const violations = scan.violations
     .slice()
-    .sort((a, b) => severityRank(a.impact) - severityRank(b.impact))
-    .slice(0, 5);
+    .sort((a, b) => severityRank(a.impact) - severityRank(b.impact));
 
   return (
     <div className="flex flex-1 flex-col gap-3">
@@ -286,13 +496,15 @@ function ResultView({
       <SaveToDashboardCallout scan={scan} />
       <CrawlCallout scan={scan} />
 
-      {top.length > 0 && (
+      {!isPanel && total > 0 && <ShowAllInPanelButton total={total} />}
+
+      {isPanel && violations.length > 0 && (
         <div className="flex flex-col gap-2">
           <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Top issues
+            All issues ({violations.length})
           </div>
           <ul className="flex flex-col gap-2">
-            {top.map((v) => (
+            {violations.map((v) => (
               <ViolationRow key={v.ruleId} violation={v} />
             ))}
           </ul>
@@ -307,6 +519,61 @@ function ResultView({
         Re-scan
       </button>
     </div>
+  );
+}
+
+/**
+ * In the action popup, this is the only entry point into the full
+ * violations list. It opens whichever dock mode the user picked
+ * (right-dock natively; left/bottom/detached via background-spawned
+ * popup window) and then closes the action popup so the page is
+ * unobscured.
+ */
+function ShowAllInPanelButton({ total }: { total: number }) {
+  const open = async () => {
+    const settings = await getSettings();
+    const mode = settings.dockMode;
+
+    if (mode === "right") {
+      // chrome.sidePanel.open() requires a user gesture and must be
+      // invoked from the same context as the click — so it lives
+      // here, not in the background.
+      const tab = await getTargetTab();
+      const winId = tab?.windowId;
+      if (winId == null) return;
+      try {
+        await chrome.sidePanel.setOptions({
+          path: "src/sidepanel/index.html",
+          enabled: true,
+        });
+        await chrome.sidePanel.open({ windowId: winId });
+      } catch {
+        /* unsupported / denied */
+      }
+    } else {
+      chrome.runtime.sendMessage(
+        openDetachedPanelRequest.parse({
+          type: "panel/openDetached",
+          mode,
+          screen: readScreenBounds(),
+        })
+      );
+    }
+
+    // Give the panel surface a beat to mount before the action
+    // popup tears itself down — closes feel snappier this way.
+    setTimeout(() => window.close(), 200);
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void open()}
+      className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-muted"
+    >
+      <ListChecks className="h-4 w-4" aria-hidden />
+      Show all {total} {total === 1 ? "issue" : "issues"}
+    </button>
   );
 }
 
@@ -350,10 +617,7 @@ function SaveToDashboardCallout({
               // it after the link succeeds. From the side panel
               // context this is the tab the user was viewing when
               // they clicked Sign in; from the popup it's the same.
-              const [sourceTab] = await chrome.tabs.query({
-                active: true,
-                currentWindow: true,
-              });
+              const sourceTab = await getTargetTab();
               const params = new URLSearchParams({
                 ext_id: chrome.runtime.id,
               });
@@ -552,7 +816,7 @@ function HighlightButton({
 
   const trigger = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await getTargetTab();
     if (tab?.id == null || tab.windowId == null) {
       setState("fail");
       setTimeout(() => setState("idle"), 1500);

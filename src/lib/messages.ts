@@ -77,6 +77,39 @@ export const scanErrorMessage = z.object({
 });
 export type ScanErrorMessage = z.infer<typeof scanErrorMessage>;
 
+// ── Popup / Panel → Background (panel orchestration) ──────────────
+
+/**
+ * Open the panel surface in one of the detached modes
+ * (left/bottom/detached). Native right-dock is opened directly from
+ * the click context with chrome.sidePanel.open() — that API requires
+ * a user gesture, which can't be forwarded across runtime messages.
+ *
+ * `screen` is passed in by the caller because the service worker
+ * has no DOM and we'd otherwise need the `system.display`
+ * permission.
+ */
+export const openDetachedPanelRequest = z.object({
+  type: z.literal("panel/openDetached"),
+  mode: z.enum(["left", "bottom", "detached"]),
+  screen: z.object({
+    availLeft: z.number().int(),
+    availTop: z.number().int(),
+    availWidth: z.number().int().positive(),
+    availHeight: z.number().int().positive(),
+  }),
+});
+export type OpenDetachedPanelRequest = z.infer<typeof openDetachedPanelRequest>;
+
+/**
+ * Close the currently-tracked detached panel window, if any. Used
+ * when switching from a detached mode back to native right-dock.
+ */
+export const closeDetachedPanelRequest = z.object({
+  type: z.literal("panel/closeDetached"),
+});
+export type CloseDetachedPanelRequest = z.infer<typeof closeDetachedPanelRequest>;
+
 // ── Link bridge → Background ──────────────────────────────────────
 
 export const authLinkMessage = z.object({
@@ -101,5 +134,7 @@ export const allMessagesSchema = z.discriminatedUnion("type", [
   authLinkMessage,
   highlightNodeCommand,
   highlightNodeRequest,
+  openDetachedPanelRequest,
+  closeDetachedPanelRequest,
 ]);
 export type AllMessages = z.infer<typeof allMessagesSchema>;

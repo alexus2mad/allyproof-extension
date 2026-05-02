@@ -46,6 +46,7 @@ export function Options() {
       telemetryEnabled: false,
       theme: "system",
       apiBase: "https://allyproof.com",
+      dockMode: "right",
     });
   };
 

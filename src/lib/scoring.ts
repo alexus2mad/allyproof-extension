@@ -9,7 +9,7 @@
  */
 
 import { getScoreColor } from "@allyproof/scan-core";
-import type { ScoreColor } from "@allyproof/scan-core";
+import type { ScoreColor, SeverityCounts } from "@allyproof/scan-core";
 
 export function scoreColorClasses(score: number): {
   text: string;
@@ -50,4 +50,22 @@ export function badgeColor(score: number | null): string {
   if (c === "green") return "#10b981";
   if (c === "amber") return "#f59e0b";
   return "#ef4444";
+}
+
+/**
+ * Toolbar badge color driven by violation severity counts. Picks
+ * the color of the worst severity present so the operator can read
+ * the badge at a glance without opening the popup:
+ *   any critical → red
+ *   any serious  → orange
+ *   any moderate → amber
+ *   only minor   → gray
+ *   nothing      → emerald
+ */
+export function badgeColorForCounts(counts: SeverityCounts): string {
+  if (counts.critical > 0) return "#ef4444"; // red-500
+  if (counts.serious > 0) return "#f97316"; // orange-500
+  if (counts.moderate > 0) return "#f59e0b"; // amber-500
+  if (counts.minor > 0) return "#9ca3af"; // gray-400
+  return "#10b981"; // emerald-500
 }

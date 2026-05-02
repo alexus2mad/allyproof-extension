@@ -25,6 +25,20 @@ export interface StoredScan {
   dashboardScanId: string | null;
 }
 
+/**
+ * Where the panel surface (full-results view) lives.
+ *   right     — native chrome.sidePanel docked right (the only true
+ *               dock; Chrome's API doesn't let us pick a side).
+ *   left      — popup window pinned to the screen's left edge.
+ *   bottom    — popup window pinned to the screen's bottom edge.
+ *   detached  — free-floating popup window centered on screen.
+ *
+ * left/bottom/detached are all `chrome.windows.create({type:"popup"})`
+ * with different positioning. They float over the page rather than
+ * truly docking — Chrome MV3 has no API for left-dock or bottom-dock.
+ */
+export type DockMode = "right" | "left" | "bottom" | "detached";
+
 export interface ExtensionSettings {
   /** Off by default — opt-in only. */
   telemetryEnabled: boolean;
@@ -32,12 +46,15 @@ export interface ExtensionSettings {
   theme: "system" | "light" | "dark";
   /** API base — defaults to prod, override for self-hosted / staging. */
   apiBase: string;
+  /** Where the full-results panel opens. Default: right (native side panel). */
+  dockMode: DockMode;
 }
 
 const DEFAULT_SETTINGS: ExtensionSettings = {
   telemetryEnabled: false,
   theme: "system",
   apiBase: "https://allyproof.com",
+  dockMode: "right",
 };
 
 const SCAN_HISTORY_CAP = 50;
@@ -104,6 +121,29 @@ export async function setAuth(auth: AuthState): Promise<void> {
 export async function clearAuth(): Promise<void> {
   await chrome.storage.session.remove("auth");
   await chrome.storage.local.remove("refresh");
+}
+
+// ── Detached panel window tracking ────────────────────────────────
+//
+// When the dock mode is left/bottom/detached we open the panel via
+// chrome.windows.create({type:"popup"}). The window id is stored in
+// session storage so we can close + reopen it on mode-switch and
+// avoid spawning duplicate panel windows. Cleared on browser
+// restart (session scope) or when chrome.windows.onRemoved fires
+// for the tracked id.
+
+export async function getPanelWindowId(): Promise<number | null> {
+  const stored = await chrome.storage.session.get("panelWindowId");
+  const id = stored.panelWindowId as number | undefined;
+  return typeof id === "number" ? id : null;
+}
+
+export async function setPanelWindowId(id: number | null): Promise<void> {
+  if (id == null) {
+    await chrome.storage.session.remove("panelWindowId");
+  } else {
+    await chrome.storage.session.set({ panelWindowId: id });
+  }
 }
 
 export async function getStoredRefreshToken(): Promise<{
