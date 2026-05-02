@@ -81,7 +81,15 @@ export default defineManifest({
   // sidePanel — required by chrome.sidePanel.open() (Chrome 116+),
   // which the popup calls when the user clicks "Show on page" so
   // results stay visible alongside the highlighted element.
-  permissions: ["storage", "activeTab", "tabs", "sidePanel"],
+  // scripting — programmatically inject the scan-runner content
+  // script when sendMessage finds no listener on the target tab.
+  // The static content_scripts declaration only runs on pages that
+  // loaded *after* the extension was installed/reloaded; tabs that
+  // were already open (or were on chrome:// when the user navigated
+  // back to a real URL) have no content script. Without this
+  // permission, "Scan this page" would mysteriously fail on those
+  // tabs with "Receiving end does not exist".
+  permissions: ["storage", "activeTab", "tabs", "sidePanel", "scripting"],
   // No host_permissions array — the matches list above is the
   // origin grant the content script needs. Crawl-mode scans run
   // server-side via /api/v1/scan; the server fetches pages, not

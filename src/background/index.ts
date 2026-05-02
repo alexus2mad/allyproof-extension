@@ -126,13 +126,56 @@ async function openDetachedPanel(
 }
 
 async function injectAndScan(tabId: number): Promise<void> {
-  // The content script is auto-injected on http(s) pages by the
-  // manifest declaration. It idles until we send it a scan/run
-  // message — at which point it loads axe-core and reports back.
-  // chrome.tabs.sendMessage fails if the tab is on a non-matching
-  // origin (chrome://, about:, the Web Store) — surfaced to the
-  // popup as a friendly "this page can't be scanned" error.
+  // Happy path: the content script is auto-injected on http(s)
+  // pages by the manifest declaration. Try sending the scan/run
+  // message directly.
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "scan/run" });
+    return;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // "Receiving end does not exist" / "Could not establish
+    // connection" both mean: the content script isn't running in
+    // this tab. That happens when the tab was open before the
+    // extension was installed/reloaded — the static content_scripts
+    // declaration only fires on subsequent page loads. Programmatic
+    // injection covers the gap.
+    const looksLikeMissingReceiver =
+      /receiving end does not exist|could not establish connection/i.test(msg);
+    if (!looksLikeMissingReceiver) throw err;
+  }
+
+  // Look up the scan-runner content script path from the runtime
+  // manifest so the crxjs-rewritten asset hash stays in sync —
+  // hardcoding "src/content/scan-runner.ts" would break each
+  // rebuild.
+  const scriptPaths = scanRunnerScriptPaths();
+  if (scriptPaths.length === 0) {
+    throw new Error("scan-runner content script not found in manifest");
+  }
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: scriptPaths,
+  });
+  // After injection the listener is registered; the original
+  // sendMessage can now succeed.
   await chrome.tabs.sendMessage(tabId, { type: "scan/run" });
+}
+
+/**
+ * Pull the scan-runner script paths out of the live manifest. The
+ * static content_scripts entry that matches http/https is the
+ * scanner — the AllyProof-origin entry is the link bridge and must
+ * never be programmatically injected into arbitrary pages.
+ */
+function scanRunnerScriptPaths(): string[] {
+  const cs = chrome.runtime.getManifest().content_scripts ?? [];
+  const scanner = cs.find(
+    (entry) =>
+      entry.matches?.includes("http://*/*") ||
+      entry.matches?.includes("https://*/*")
+  );
+  return scanner?.js ?? [];
 }
 
 async function setBadgeForTab(

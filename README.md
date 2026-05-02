@@ -68,6 +68,7 @@ Minimal by design:
 - `tabs` — read tab URL/title across tabs so the side panel can show the current tab's scan when the user switches tabs. Tab metadata only — no DOM access.
 - `storage` — local + session buckets for tokens and scan history. Never `sync` (would push tokens cross-device).
 - `sidePanel` — open the in-browser results panel.
+- `scripting` — programmatic content-script injection as a fallback when the static-declared scanner isn't running (tabs that were open before the extension installed/reloaded). Path is read from the manifest at runtime so it can't be re-pointed.
 
 ## License
 

@@ -44,6 +44,19 @@ user can fix issues without losing context. `chrome.sidePanel.open()`
 is the only way to programmatically open the panel from the action
 popup's "Show all issues" button.
 
+## `scripting`
+
+When the user clicks "Scan this page", the extension first tries to
+deliver the scan command to the auto-injected content script declared
+in the manifest. If the target tab was open *before* the extension
+was installed or reloaded, that static injection never ran — the
+sendMessage fails with "Receiving end does not exist". `scripting`
+lets the background worker fall back to `chrome.scripting.executeScript`
+to inject the same scan-runner file (the exact path is read from
+`chrome.runtime.getManifest().content_scripts`, so it cannot be
+re-pointed at arbitrary code) and retry. Without this permission, any
+pre-existing tab would silently fail to scan.
+
 ## Host permissions: none
 
 The manifest deliberately does NOT request `<all_urls>` or any other
