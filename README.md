@@ -62,13 +62,7 @@ Listing copy, permission justifications, screenshot checklist, and the per-store
 
 ## Permissions
 
-Minimal by design:
-
-- `activeTab` — inject the scanner into the active tab on user click. NOT `<all_urls>` host access.
-- `tabs` — read tab URL/title across tabs so the side panel can show the current tab's scan when the user switches tabs. Tab metadata only — no DOM access.
-- `storage` — local + session buckets for tokens and scan history. Never `sync` (would push tokens cross-device).
-- `sidePanel` — open the in-browser results panel.
-- `scripting` — programmatic content-script injection as a fallback when the static-declared scanner isn't running (tabs that were open before the extension installed/reloaded). Path is read from the manifest at runtime so it can't be re-pointed.
+Minimal by design — no `<all_urls>` host permission. See [`store/permissions-justifications.md`](./store/permissions-justifications.md) for the per-permission rationale used in the store listings.
 
 ## License
 
