@@ -17,9 +17,25 @@ import {
   type ExtensionSettings,
 } from "@/lib/storage";
 
+function isValidApiBase(value: string): boolean {
+  try {
+    const u = new URL(value);
+    return u.protocol === "https:" || u.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 export function Options() {
   const [settings, setLocal] = useState<ExtensionSettings | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  // apiBase is edited as a draft string while the user types so we
+  // don't persist intermediate invalid values like "" or "https://".
+  // Persist only on blur, and only if the value parses as a URL —
+  // otherwise the API client would later try to fetch from "" and
+  // every backend call would silently 404 / TypeError.
+  const [apiBaseDraft, setApiBaseDraft] = useState<string | null>(null);
+  const [apiBaseError, setApiBaseError] = useState<string | null>(null);
 
   useEffect(() => {
     void getSettings().then(setLocal);
@@ -36,6 +52,22 @@ export function Options() {
     setLocal(next);
     await setSettings(patch);
     setSavedAt(Date.now());
+  };
+
+  const commitApiBase = async () => {
+    const candidate = apiBaseDraft ?? settings.apiBase;
+    if (candidate === settings.apiBase) {
+      setApiBaseDraft(null);
+      setApiBaseError(null);
+      return;
+    }
+    if (!isValidApiBase(candidate)) {
+      setApiBaseError("Must be a full URL (https://… or http://…).");
+      return;
+    }
+    setApiBaseError(null);
+    setApiBaseDraft(null);
+    await update({ apiBase: candidate.replace(/\/+$/, "") });
   };
 
   const wipe = async () => {
@@ -109,14 +141,35 @@ export function Options() {
           <span className="text-sm font-medium">API base URL</span>
           <input
             type="url"
-            value={settings.apiBase}
-            onChange={(e) => update({ apiBase: e.target.value })}
-            className="rounded-md border border-border bg-card px-2 py-1 text-sm font-mono"
+            value={apiBaseDraft ?? settings.apiBase}
+            onChange={(e) => {
+              setApiBaseDraft(e.target.value);
+              setApiBaseError(null);
+            }}
+            onBlur={() => void commitApiBase()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void commitApiBase();
+              if (e.key === "Escape") {
+                setApiBaseDraft(null);
+                setApiBaseError(null);
+              }
+            }}
+            aria-invalid={apiBaseError != null}
+            aria-describedby="api-base-help"
+            className={`rounded-md border bg-card px-2 py-1 text-sm font-mono ${
+              apiBaseError ? "border-red-500" : "border-border"
+            }`}
             placeholder="https://allyproof.com"
           />
-          <span className="text-xs text-muted-foreground">
-            Change only for self-hosted or staging environments.
-          </span>
+          {apiBaseError ? (
+            <span className="text-xs text-red-600 dark:text-red-400" id="api-base-help">
+              {apiBaseError}
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground" id="api-base-help">
+              Change only for self-hosted or staging environments. Saves on blur or Enter.
+            </span>
+          )}
         </label>
       </section>
 

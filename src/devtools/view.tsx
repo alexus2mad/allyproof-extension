@@ -26,15 +26,34 @@ export function PanelView() {
 
   useEffect(() => {
     void (async () => {
-      const recent = await getRecentScans(1);
-      const inspectedTabId = chrome.devtools?.inspectedWindow?.tabId;
-      if (inspectedTabId != null) {
-        const tab = await chrome.tabs.get(inspectedTabId).catch(() => null);
-        if (tab?.url) {
-          const match = recent.find((s) => s.url === tab.url);
-          setScan(match ?? recent[0] ?? null);
-          return;
+      // Pull a wider window of recent scans so we can match by URL
+      // rather than always defaulting to the latest.
+      const recent = await getRecentScans(20);
+      // chrome.tabs.get(tabId).url returns undefined without the
+      // "tabs" permission (which we don't request — see manifest
+      // permission justifications). Use inspectedWindow.eval to read
+      // the URL from inside the inspected page itself; that path
+      // doesn't need any extra permission.
+      const inspectedUrl = await new Promise<string | null>((resolve) => {
+        try {
+          chrome.devtools.inspectedWindow.eval<string>(
+            "location.href",
+            (result, info) => {
+              if (info?.isException || typeof result !== "string") {
+                resolve(null);
+              } else {
+                resolve(result);
+              }
+            }
+          );
+        } catch {
+          resolve(null);
         }
+      });
+      if (inspectedUrl) {
+        const match = recent.find((s) => s.url === inspectedUrl);
+        setScan(match ?? recent[0] ?? null);
+        return;
       }
       setScan(recent[0] ?? null);
     })();

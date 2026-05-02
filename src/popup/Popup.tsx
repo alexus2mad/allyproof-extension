@@ -266,20 +266,44 @@ const DOCK_OPTIONS: ReadonlyArray<{
   { mode: "detached", label: "Detach window", Icon: PictureInPicture2 },
 ];
 
+/**
+ * Firefox MV3 doesn't implement chrome.sidePanel. The "right" dock
+ * mode wraps that API, so on Firefox we must hide the option and
+ * silently coerce a stored "right" preference (e.g. profile synced
+ * over from a Chrome install) to "detached".
+ */
+function isSidePanelSupported(): boolean {
+  return typeof chrome.sidePanel !== "undefined";
+}
+
 function DockModeSwitcher({ className }: { className?: string }) {
   const [current, setCurrent] = useState<DockMode | null>(null);
+  // Guard against rapid double-clicks producing concurrent
+  // setOptions / windows.create calls. Without this, two near-
+  // simultaneous mode switches can race the panel-window tracker
+  // and leave the user with two stacked panel windows.
+  const [switching, setSwitching] = useState(false);
 
   // Lazy-read on mount; don't render anything until we know the
   // current mode so the active state is honest.
   useEffect(() => {
     void (async () => {
       const s = await getSettings();
-      setCurrent(s.dockMode);
+      const effective = !isSidePanelSupported() && s.dockMode === "right"
+        ? "detached"
+        : s.dockMode;
+      setCurrent(effective);
     })();
   }, []);
 
+  const options = isSidePanelSupported()
+    ? DOCK_OPTIONS
+    : DOCK_OPTIONS.filter((o) => o.mode !== "right");
+
   const switchTo = async (next: DockMode) => {
-    if (next === current) return;
+    if (next === current || switching) return;
+    setSwitching(true);
+    try {
     await setSettings({ dockMode: next });
     setCurrent(next);
 
@@ -335,12 +359,15 @@ function DockModeSwitcher({ className }: { className?: string }) {
     );
     // If we're switching from right-dock, hide the side panel so
     // the user doesn't end up with both surfaces visible.
-    if (current === "right") {
+    if (current === "right" && isSidePanelSupported()) {
       try {
         await chrome.sidePanel.setOptions({ enabled: false });
       } catch {
         /* no-op */
       }
+    }
+    } finally {
+      setSwitching(false);
     }
   };
 
@@ -352,7 +379,7 @@ function DockModeSwitcher({ className }: { className?: string }) {
       aria-label="Panel position"
       className={`inline-flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5 ${className ?? ""}`}
     >
-      {DOCK_OPTIONS.map(({ mode, label, Icon }) => {
+      {options.map(({ mode, label, Icon }) => {
         const active = mode === current;
         return (
           <button
@@ -377,9 +404,17 @@ function DockModeSwitcher({ className }: { className?: string }) {
 }
 
 function Footer() {
+  // The "no data leaves" line is only true while the user is signed
+  // out. Once authed, save-to-dashboard, AI fix, and crawl all send
+  // data to AllyProof — keeping the original copy would be misleading
+  // to the user (and to a Chrome reviewer doing privacy audit).
+  const { auth, loading } = useAuth();
+  if (loading) return null;
   return (
     <div className="mt-auto pt-3 text-center text-[11px] text-muted-foreground">
-      Local quick scan · axe-core 4.x · No data leaves this device
+      {auth
+        ? "axe-core · synced to AllyProof when you save, fix, or crawl"
+        : "Local quick scan · axe-core · No data leaves this device"}
     </div>
   );
 }
@@ -532,7 +567,14 @@ function ResultView({
 function ShowAllInPanelButton({ total }: { total: number }) {
   const open = async () => {
     const settings = await getSettings();
-    const mode = settings.dockMode;
+    // Coerce a stale "right" preference to "detached" on browsers
+    // without chrome.sidePanel (Firefox MV3). Without this, clicking
+    // "Show all issues" on Firefox would silently close the popup
+    // and never open any panel — confusing dead-end UX.
+    const mode =
+      settings.dockMode === "right" && !isSidePanelSupported()
+        ? "detached"
+        : settings.dockMode;
 
     if (mode === "right") {
       // chrome.sidePanel.open() requires a user gesture and must be
