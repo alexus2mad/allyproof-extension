@@ -134,20 +134,24 @@ export function Popup() {
   });
   const surface = useSurfaceKind();
 
-  // Hydrate from storage on mount. If we already have a stored
-  // scan for the active tab's URL, jump straight to the ready
-  // state — opening the popup after the user dismissed it (e.g.
-  // because they hit Esc, clicked the highlight button, or just
-  // glanced away) shouldn't drop them back to the empty "Scan
-  // this page" screen.
+  // Hydrate from storage on mount AND whenever the user changes
+  // tabs / the active tab finishes navigating. The action popup
+  // remounts on every open so it sees fresh state for free; the
+  // panel surfaces (right side panel, detached popup window) live
+  // across tab switches and need explicit re-hydration — otherwise
+  // the panel keeps showing the previous tab's scan after the user
+  // moves to a different page.
   useEffect(() => {
-    void (async () => {
+    let cancelled = false;
+    const hydrate = async () => {
       const tab = await getTargetTab();
+      if (cancelled) return;
       const url = tab?.url ?? null;
       const title = tab?.title ?? null;
 
       if (url) {
         const recent = await getRecentScans(20);
+        if (cancelled) return;
         const match = recent.find((s) => s.url === url);
         if (match) {
           setScan({
@@ -168,7 +172,38 @@ export function Popup() {
         pageUrl: url,
         pageTitle: title,
       });
-    })();
+    };
+    void hydrate();
+
+    // onActivated — user clicked a different tab in the strip.
+    const onActivated = () => void hydrate();
+    // onUpdated — page navigated (URL change) or finished loading.
+    // Filter to those two signals; raw "loading" events fire too
+    // often and would needlessly churn through hydrate. The url
+    // field on info is only populated when the URL itself changed.
+    const onUpdated = (
+      _tabId: number,
+      info: chrome.tabs.TabChangeInfo
+    ) => {
+      if (info.url || info.status === "complete") void hydrate();
+    };
+    // onFocusChanged — user switched browser windows. Relevant in
+    // detached panel-window mode where the user's "real" tab lives
+    // in a different window than the panel.
+    const onFocusChanged = (windowId: number) => {
+      if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+      void hydrate();
+    };
+
+    chrome.tabs.onActivated.addListener(onActivated);
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.windows?.onFocusChanged?.addListener(onFocusChanged);
+    return () => {
+      cancelled = true;
+      chrome.tabs.onActivated.removeListener(onActivated);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      chrome.windows?.onFocusChanged?.removeListener(onFocusChanged);
+    };
   }, []);
 
   // Listen for scan results streamed from background (which
