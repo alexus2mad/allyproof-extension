@@ -12,7 +12,7 @@
  * done.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ShieldCheck,
   Loader2,
@@ -142,16 +142,24 @@ export function Popup() {
   // the panel keeps showing the previous tab's scan after the user
   // moves to a different page.
   useEffect(() => {
-    let cancelled = false;
+    // Each hydrate call gets a monotonically-increasing generation
+    // number. Only the most-recent invocation is allowed to write
+    // setScan — earlier calls that lose the race silently drop.
+    // Without this, fast tab-switching can let an older
+    // getRecentScans() resolve after a newer one and overwrite the
+    // panel with stale data for a tab the user has already left.
+    let activeGen = 0;
+    let unmounted = false;
     const hydrate = async () => {
+      const myGen = ++activeGen;
       const tab = await getTargetTab();
-      if (cancelled) return;
+      if (unmounted || myGen !== activeGen) return;
       const url = tab?.url ?? null;
       const title = tab?.title ?? null;
 
       if (url) {
         const recent = await getRecentScans(20);
-        if (cancelled) return;
+        if (unmounted || myGen !== activeGen) return;
         const match = recent.find((s) => s.url === url);
         if (match) {
           setScan({
@@ -199,7 +207,7 @@ export function Popup() {
     chrome.tabs.onUpdated.addListener(onUpdated);
     chrome.windows?.onFocusChanged?.addListener(onFocusChanged);
     return () => {
-      cancelled = true;
+      unmounted = true;
       chrome.tabs.onActivated.removeListener(onActivated);
       chrome.tabs.onUpdated.removeListener(onUpdated);
       chrome.windows?.onFocusChanged?.removeListener(onFocusChanged);
@@ -316,8 +324,11 @@ function DockModeSwitcher({ className }: { className?: string }) {
   // Guard against rapid double-clicks producing concurrent
   // setOptions / windows.create calls. Without this, two near-
   // simultaneous mode switches can race the panel-window tracker
-  // and leave the user with two stacked panel windows.
-  const [switching, setSwitching] = useState(false);
+  // and leave the user with two stacked panel windows. Must be a
+  // ref, not useState — two click handlers fired before React
+  // processes the first state update would both read switching:
+  // false from their respective closures and both pass the guard.
+  const switchingRef = useRef(false);
 
   // Lazy-read on mount; don't render anything until we know the
   // current mode so the active state is honest.
@@ -336,8 +347,8 @@ function DockModeSwitcher({ className }: { className?: string }) {
     : DOCK_OPTIONS.filter((o) => o.mode !== "right");
 
   const switchTo = async (next: DockMode) => {
-    if (next === current || switching) return;
-    setSwitching(true);
+    if (next === current || switchingRef.current) return;
+    switchingRef.current = true;
     try {
     await setSettings({ dockMode: next });
     setCurrent(next);
@@ -402,7 +413,7 @@ function DockModeSwitcher({ className }: { className?: string }) {
       }
     }
     } finally {
-      setSwitching(false);
+      switchingRef.current = false;
     }
   };
 

@@ -41,14 +41,19 @@ export default defineConfig({
     target: "es2022",
     sourcemap: true,
     rollupOptions: {
-      // crxjs only walks HTML files referenced from the manifest. The
-      // DevTools panel HTML is referenced as a string inside
-      // src/devtools/register.ts (chrome.devtools.panels.create), which
-      // crxjs can't statically analyse — so we add it as an explicit
-      // additional input here. Without this, dist/src/devtools/panel.html
-      // is missing and the DevTools panel silently fails to load.
+      // crxjs only walks HTML files referenced from the manifest:
+      //   - DevTools panel.html is referenced as a string inside
+      //     src/devtools/register.ts and not statically analysable.
+      //   - sidepanel/index.html is referenced from the side_panel
+      //     manifest entry on Chromium, but on Firefox we omit that
+      //     entry (Firefox doesn't implement chrome.sidePanel) — yet
+      //     left/bottom/detached dock modes still load the sidepanel
+      //     HTML via chrome.windows.create on Firefox.
+      // Both must be declared as explicit inputs so they ship in
+      // every build target.
       input: {
         "devtools-panel": path.resolve(__dirname, "src/devtools/panel.html"),
+        "sidepanel": path.resolve(__dirname, "src/sidepanel/index.html"),
       },
     },
   },

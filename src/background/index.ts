@@ -201,14 +201,21 @@ chrome.runtime.onMessage.addListener((raw, sender, sendResponse) => {
   if (start.success) {
     void injectAndScan(start.data.tabId).catch((err) => {
       // executeScript fails on chrome:// pages, the Web Store
-      // origin, etc. Surface a friendly error rather than a
-      // silent no-op.
+      // origin, view-source: URLs, PDFs, etc. Translate Chrome's
+      // raw "Cannot access contents of url ..." into a user-
+      // facing line that explains the actual constraint instead
+      // of leaking the internal error. Anything else (network
+      // races, internal bugs) surfaces verbatim so we can debug.
+      const raw = err instanceof Error ? err.message : String(err);
+      const blocked =
+        /cannot access contents of|cannot access a chrome|extension manifest must request permission/i.test(
+          raw
+        );
       void chrome.runtime.sendMessage({
         type: "scan/error",
-        message:
-          err instanceof Error
-            ? `Couldn't inject scanner: ${err.message}`
-            : "Couldn't inject scanner on this page (browser-internal pages are off-limits).",
+        message: blocked
+          ? "This page can't be scanned — browser-internal pages (chrome://, the Web Store, view-source:, PDFs) are off-limits."
+          : `Couldn't inject scanner: ${raw}`,
       });
     });
     sendResponse({ ok: true });

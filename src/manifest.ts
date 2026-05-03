@@ -89,7 +89,9 @@ export default defineManifest({
   // back to a real URL) have no content script. Without this
   // permission, "Scan this page" would mysteriously fail on those
   // tabs with "Receiving end does not exist".
-  permissions: ["storage", "activeTab", "tabs", "sidePanel", "scripting"],
+  permissions: isFirefox
+    ? ["storage", "activeTab", "tabs", "scripting"]
+    : ["storage", "activeTab", "tabs", "sidePanel", "scripting"],
   // No host_permissions array — the matches list above is the
   // origin grant the content script needs. Crawl-mode scans run
   // server-side via /api/v1/scan; the server fetches pages, not
