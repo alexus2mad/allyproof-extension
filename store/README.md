@@ -14,7 +14,6 @@ forms.
 | `listing-chrome.md` | Chrome Web Store admin | Paste into Chrome Web Store dashboard fields |
 | `listing-edge.md` | Microsoft Partner Center | Paste into Edge Add-ons listing fields |
 | `listing-firefox.md` | addons.mozilla.org | Paste into AMO listing fields |
-| `screenshots/README.md` | You | Checklist of screenshots to capture before submitting |
 | `changelog.md` | Reviewers + users | Paste the matching version block into each store's "What's new" field on every update |
 
 ## Before each submission
@@ -28,9 +27,7 @@ forms.
    - `allyproof-chrome-vX.Y.Z.zip` → Chrome + Edge
    - `allyproof-firefox-vX.Y.Z.zip` → Firefox AMO
    - `allyproof-source-vX.Y.Z.zip` → Firefox AMO source attachment
-3. Confirm screenshots in `store/screenshots/` are current (re-capture if
-   the UI changed since the last release).
-4. Add a new dated section to `changelog.md`.
+3. Add a new dated section to `changelog.md`.
 
 ## Privacy policy URL
 

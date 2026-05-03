@@ -76,10 +76,9 @@ https://allyproof.com/support
 ## Promotional images (optional but recommended)
 - Small promo tile: 440×280 PNG/JPG
 - Marquee promo: 1400×560 PNG/JPG (carousel feature; reviewer-curated)
-- Place artwork in `store/screenshots/promo/` once ready.
 
 ## Screenshots
-Required: 1–5 screenshots at 1280×800 OR 640×400. See `screenshots/README.md`.
+Required: 1–5 screenshots at 1280×800 OR 640×400.
 
 ## Distribution
 - Visibility: Public

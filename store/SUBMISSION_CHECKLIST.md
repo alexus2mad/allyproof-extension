@@ -9,7 +9,7 @@ phase until the previous one is green.
 
 - [x] Code complete: 1.0.0 builds clean, type-checked, no console errors in any of the 4 dock modes
 - [x] Three release zips in `release/`: `allyproof-chrome-v1.0.0.zip`, `allyproof-firefox-v1.0.0.zip`, `allyproof-source-v1.0.0.zip`
-- [x] Reviewer-facing docs in `store/`: single-purpose, permission justifications, listing copy ×3, screenshots checklist, changelog
+- [x] Reviewer-facing docs in `store/`: single-purpose, permission justifications, listing copy ×3, changelog
 - [x] Legal pages updated on allyproof.com (privacy §13, terms §18, trust) — pushed in commit `dfd2c2b`
 - [x] README documents the release flow
 
@@ -41,22 +41,13 @@ If anything fails: file an issue, fix, bump to 1.0.1, regenerate zips.
 
 ## Phase 2 — screenshots (~1–2 hours, you)
 
-Window size: 1280 × 800 viewport. Use Win+Shift+S, then crop in any
-editor. Save to `store/screenshots/` as listed in `screenshots/README.md`.
-
-- [ ] `01-popup-result.png` — action popup after scan
-- [ ] `02-side-panel-right.png` — side panel docked right with violation list
-- [ ] `03-show-on-page.png` — page with AllyProof highlight overlay
-- [ ] `04-ai-fix.png` — side panel showing generated AI fix drawer
-- [ ] `05-dock-modes.png` — composite or detached-window shot
+Capture 1–5 PNGs at 1280×800 (Chrome/Edge/AMO all accept this size).
+Win+Shift+S, save locally, upload directly to each store dashboard.
+Don't commit them to the repo unless the team explicitly wants
+versioned screenshot sources.
 
 Optional Chrome promo art (only if you want a shot at the Chrome
-"Featured" carousel):
-
-- [ ] `screenshots/promo/promo-440x280.png` — small tile
-- [ ] `screenshots/promo/promo-1400x560.png` — marquee
-
-Strip EXIF before saving (most editors do this on save).
+"Featured" carousel): 440×280 small tile, 1400×560 marquee.
 
 ---
 
