@@ -1,0 +1,141 @@
+# Release workflow for the AllyProof browser extension.
+#
+# Triggers on tag push matching v* (e.g. v1.0.0, v1.0.1). Builds all
+# three release artifacts via `npm run release:all` and attaches them
+# to a GitHub Release — that gives the team a single download point per
+# version with the exact ZIPs that should be uploaded to each store.
+#
+# Does NOT auto-publish to the Chrome Web Store / Edge Add-ons / Firefox
+# AMO. Each store needs a human in the loop for the privacy practices
+# form, screenshot review, and per-release notes anyway. Auto-publish
+# would also require storing each store's OAuth refresh token as a
+# long-lived secret — large blast radius if leaked.
+#
+# Cross-repo dependency on @allyproof/scan-core is handled the same way
+# as ci.yml — sparse checkout of the main app repo with a PAT.
+#
+# To cut a release:
+#   1. Bump package.json `version` (and run `npm install` to update lock).
+#   2. Update `store/changelog.md` with the release notes.
+#   3. Commit + push to main.
+#   4. Tag: `git tag v1.0.1 && git push origin v1.0.1`
+#   5. This workflow builds + attaches ZIPs to a GitHub Release named v1.0.1.
+#   6. Download the three ZIPs and upload each to its respective store.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# A release is a one-way operation — no point cancelling.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # required for softprops/action-gh-release to create + attach assets
+
+jobs:
+  release:
+    name: Build all + create GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout extension repo
+        uses: actions/checkout@v4
+        with:
+          path: allyproof-extension
+          fetch-depth: 0  # full history so the release notes can reference prior commits
+
+      - name: Checkout main app repo (for @allyproof/scan-core)
+        uses: actions/checkout@v4
+        with:
+          repository: alexus2mad/allyproof
+          token: ${{ secrets.MAIN_APP_REPO_TOKEN }}
+          path: accessiscan
+          sparse-checkout: |
+            services/scan-core
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: allyproof-extension/package-lock.json
+
+      - name: Build @allyproof/scan-core
+        working-directory: accessiscan/services/scan-core
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Install extension deps
+        working-directory: allyproof-extension
+        run: npm ci
+
+      - name: Verify tag matches package.json version
+        working-directory: allyproof-extension
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${PKG_VERSION}"
+            exit 1
+          fi
+          echo "Tag and package.json agree on v${PKG_VERSION}"
+
+      - name: Build all three release ZIPs
+        working-directory: allyproof-extension
+        run: npm run release:all
+
+      - name: List release artifacts
+        working-directory: allyproof-extension
+        run: ls -lh release/
+
+      # Extract the matching changelog entry for this version so it lands
+      # in the GitHub Release body. Falls back to the full changelog if no
+      # matching section is found.
+      - name: Prepare release notes
+        id: notes
+        working-directory: allyproof-extension
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ -f store/changelog.md ]; then
+            # Pull the section starting at "## vX.Y.Z" up to the next "## v"
+            NOTES=$(awk -v ver="## v${VERSION}" '
+              $0 == ver { found = 1; next }
+              found && /^## v/ { exit }
+              found { print }
+            ' store/changelog.md)
+            if [ -z "$NOTES" ]; then
+              NOTES=$(cat store/changelog.md)
+            fi
+          else
+            NOTES="See store/changelog.md for details."
+          fi
+          {
+            echo 'notes<<EOF'
+            echo "$NOTES"
+            echo ''
+            echo '---'
+            echo 'Download the matching ZIP from this release and upload it to:'
+            echo '- Chrome Web Store: `allyproof-chrome-v'"${VERSION}"'.zip`'
+            echo '- Microsoft Edge Add-ons: `allyproof-chrome-v'"${VERSION}"'.zip` (Edge accepts the Chrome MV3 package directly)'
+            echo '- Firefox Add-ons (AMO): `allyproof-firefox-v'"${VERSION}"'.zip` + `allyproof-source-v'"${VERSION}"'.zip` (AMO requires the source bundle)'
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body: ${{ steps.notes.outputs.notes }}
+          draft: true     # human reviews the release notes before publishing
+          prerelease: false
+          files: |
+            allyproof-extension/release/allyproof-chrome-v*.zip
+            allyproof-extension/release/allyproof-firefox-v*.zip
+            allyproof-extension/release/allyproof-source-v*.zip

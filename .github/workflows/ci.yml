@@ -1,0 +1,104 @@
+# CI for the AllyProof browser extension.
+#
+# Runs on every push to main and every pull request. Catches regressions
+# in typecheck and build before they get tagged for a Chrome Web Store /
+# Edge / Firefox submission.
+#
+# Cross-repo gotcha: package.json declares
+# "@allyproof/scan-core": "file:../accessiscan/services/scan-core"
+# (a sibling-path file dep, matching local dev layout). CI mirrors that
+# layout by checking BOTH repos out side-by-side under a custom path:
+# parameter, then builds scan-core in place before installing the
+# extension's deps.
+#
+# The main-app repo (alexus2mad/allyproof) is private, so the checkout
+# of it requires a Personal Access Token stored as the MAIN_APP_REPO_TOKEN
+# secret. See `docs/CI_SETUP.md` for the one-time PAT setup.
+#
+# Long-term: publish @allyproof/scan-core to npm and drop the file: dep
+# entirely — this entire dual-checkout dance goes away and CI becomes
+# a plain `npm ci && npm run build`.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs for the same branch when a new push lands —
+# saves runner minutes during rapid iteration.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Typecheck + build (Chrome + Firefox)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout extension repo
+        uses: actions/checkout@v4
+        with:
+          path: allyproof-extension
+
+      - name: Checkout main app repo (for @allyproof/scan-core)
+        uses: actions/checkout@v4
+        with:
+          repository: alexus2mad/allyproof
+          token: ${{ secrets.MAIN_APP_REPO_TOKEN }}
+          path: accessiscan
+          # We only need services/scan-core — sparse checkout keeps the
+          # clone small and avoids pulling the entire main app onto the
+          # runner.
+          sparse-checkout: |
+            services/scan-core
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: allyproof-extension/package-lock.json
+
+      - name: Build @allyproof/scan-core
+        working-directory: accessiscan/services/scan-core
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Install extension deps
+        working-directory: allyproof-extension
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: allyproof-extension
+        run: npm run typecheck
+
+      - name: Build (Chrome / Chromium target)
+        working-directory: allyproof-extension
+        run: npm run build
+
+      - name: Build (Firefox target)
+        working-directory: allyproof-extension
+        run: npm run build:firefox
+
+      # Smoke-test the manifest dist after each build — catches a class
+      # of release bugs (missing icons, wrong manifest_version, version
+      # mismatch with package.json) before they ever reach a store upload.
+      - name: Validate manifest output
+        working-directory: allyproof-extension
+        run: |
+          test -f dist/manifest.json || { echo "dist/manifest.json missing"; exit 1; }
+          node -e "
+            const m = require('./dist/manifest.json');
+            if (m.manifest_version !== 3) { console.error('manifest_version must be 3'); process.exit(1); }
+            if (!m.version || !/^\d+\.\d+\.\d+$/.test(m.version)) { console.error('bad version: ' + m.version); process.exit(1); }
+            for (const sz of ['16','32','48','128']) {
+              if (!m.icons || !m.icons[sz]) { console.error('missing icon ' + sz); process.exit(1); }
+            }
+            console.log('manifest OK — v' + m.version);
+          "
