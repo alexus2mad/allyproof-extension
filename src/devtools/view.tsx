@@ -41,9 +41,14 @@ export function PanelView() {
   }, []);
 
   useEffect(() => {
-    const listener = (raw: unknown) => {
+    const listener = (raw: unknown, sender: chrome.runtime.MessageSender) => {
       const result = scanResultMessage.safeParse(raw);
       if (result.success) {
+        // This panel inspects exactly one tab — ignore results
+        // arriving from scans in other tabs, or the panel would
+        // silently swap to a different page's data.
+        const inspectedTabId = chrome.devtools?.inspectedWindow?.tabId;
+        if (sender.tab?.id != null && sender.tab.id !== inspectedTabId) return;
         const r = result.data;
         const violations = r.violations as ProcessedViolation[];
         setScan({
@@ -55,6 +60,8 @@ export function PanelView() {
           score: r.score,
           counts: r.counts as SeverityCounts,
           violations,
+          needsReview: (r.needsReview ?? []) as ProcessedViolation[],
+          environment: r.environment,
           dashboardScanId: null,
         });
       }
@@ -74,7 +81,23 @@ export function PanelView() {
   const inspectNode = (selector: string) => {
     if (!selector) return;
     const safe = JSON.stringify(selector);
-    chrome.devtools.inspectedWindow.eval(`inspect(document.querySelector(${safe}))`);
+    // Selectors with " >>> " are shadow-DOM chains (see lib/target) —
+    // querySelector can't cross shadow roots, so walk them hop by hop.
+    chrome.devtools.inspectedWindow.eval(
+      `(() => {
+        const hops = ${safe}.split(" >>> ");
+        let root = document, el = null;
+        for (let i = 0; i < hops.length; i++) {
+          el = root.querySelector(hops[i]);
+          if (!el) return;
+          if (i < hops.length - 1) {
+            if (!el.shadowRoot) return;
+            root = el.shadowRoot;
+          }
+        }
+        inspect(el);
+      })()`
+    );
   };
 
   if (!scan) {

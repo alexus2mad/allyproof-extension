@@ -100,6 +100,10 @@ export default defineManifest({
     page: "src/options/index.html",
     open_in_tab: true,
   },
+  // chrome.sidePanel.open() needs 116; declaring the floor here
+  // keeps pre-116 users on the store's last compatible version
+  // instead of installing a build whose panel silently can't open.
+  ...(isFirefox ? {} : { minimum_chrome_version: "116" }),
   // Side panel — Chrome 114+. Firefox doesn't support sidePanel as
   // of MV3; the entry is omitted there and the popup remains the
   // primary surface.

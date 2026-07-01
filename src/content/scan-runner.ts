@@ -31,35 +31,162 @@ import {
   runScanCommand,
   highlightNodeCommand,
 } from "@/lib/messages";
+import type { ScanEnvironment } from "@/lib/messages";
+import { flattenTarget, splitSelectorChain } from "@/lib/target";
+
+/**
+ * Duplicate-copy dispatch lock. The background falls back to
+ * chrome.scripting.executeScript when the static declaration didn't
+ * fire (tab predates install) — and that can land while a copy of
+ * this script is ALREADY live. Each injected copy is a fresh module
+ * with its own listener and its own scanInFlight, so two live
+ * copies means every scan runs twice and every result is stored
+ * twice.
+ *
+ * All copies share the tab's isolated world, so a window global
+ * arbitrates: for each message dispatch (delivered to every copy's
+ * listener back-to-back), only the first copy to claim the key
+ * within the window handles it.
+ *
+ * Deliberately NOT a register-once sentinel: after an extension
+ * reload the orphaned copy's sentinel would still be set and would
+ * permanently mute the freshly injected copy. Orphaned copies stop
+ * receiving messages entirely, so a per-dispatch lock has no such
+ * failure mode.
+ */
+declare global {
+  interface Window {
+    __ALLYPROOF_DISPATCH__?: Record<string, number>;
+  }
+}
+
+function claimDispatch(key: string): boolean {
+  const store = (window.__ALLYPROOF_DISPATCH__ ??= {});
+  const now = Date.now();
+  if (now - (store[key] ?? 0) < 300) return false;
+  store[key] = now;
+  return true;
+}
+
+/**
+ * sendMessage throws "Extension context invalidated" if the
+ * extension was reloaded/updated while this orphaned copy is still
+ * attached to the page. Nothing useful can be done — the new
+ * extension version will inject a fresh copy — so swallow instead
+ * of spraying unhandled rejections into the audited page's console.
+ */
+function safeSend(message: unknown): void {
+  try {
+    void chrome.runtime.sendMessage(message).catch(() => {});
+  } catch {
+    /* context invalidated */
+  }
+}
+
+/**
+ * Determinism gate — the #1 source of "same site, different results
+ * on my other PC" reports was scanning at whatever load state the
+ * page happened to be in when the user clicked. axe reads the LIVE
+ * render: color-contrast needs final colors and web fonts,
+ * target-size needs settled layout, and lazily-hydrated DOM simply
+ * isn't there yet on a slow machine. A fast desktop on fiber scans
+ * a finished page; a laptop on hotel Wi-Fi scans a half-loaded one
+ * — different DOM, different violations, same URL.
+ *
+ * So before running axe we wait for, each with a hard cap so a
+ * page that never finishes (infinite spinners, hung trackers)
+ * can't wedge the scan:
+ *   1. window load  — images + stylesheets (cap 10s)
+ *   2. fonts.ready  — web fonts swap text metrics, which moves
+ *      layout under target-size and can change which element is
+ *      the contrast background (cap 3s)
+ *   3. double rAF   — one committed frame after both, so style/
+ *      layout recalc from late arrivals is flushed
+ */
+const LOAD_SETTLE_CAP_MS = 10_000;
+const FONTS_SETTLE_CAP_MS = 3_000;
+
+function afterTimeout(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForPageSettled(): Promise<void> {
+  if (document.readyState !== "complete") {
+    await Promise.race([
+      new Promise<void>((resolve) =>
+        window.addEventListener("load", () => resolve(), { once: true })
+      ),
+      afterTimeout(LOAD_SETTLE_CAP_MS),
+    ]);
+  }
+  try {
+    await Promise.race([
+      document.fonts.ready.then(() => undefined),
+      afterTimeout(FONTS_SETTLE_CAP_MS),
+    ]);
+  } catch {
+    // FontFaceSet.ready can reject on individual font failures —
+    // the page is as settled as it's going to get.
+  }
+  await new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  );
+}
+
+function captureEnvironment(axeVersion: string): ScanEnvironment {
+  const matches = (query: string) => window.matchMedia(query).matches;
+  return {
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio,
+    colorScheme: matches("(prefers-color-scheme: dark)") ? "dark" : "light",
+    forcedColors: matches("(forced-colors: active)"),
+    reducedMotion: matches("(prefers-reduced-motion: reduce)"),
+    language: navigator.language,
+    userAgent: navigator.userAgent,
+    axeVersion,
+    extensionVersion: chrome.runtime.getManifest().version,
+  };
+}
+
+// Overlapping runs are axe's other nondeterminism trap: a second
+// axe.run while one is in flight throws "Axe is already running",
+// which surfaced as a spurious scan error on double-click. One run
+// at a time; concurrent requests are dropped (the in-flight run's
+// result message serves both).
+let scanInFlight = false;
 
 async function runScan(): Promise<void> {
+  if (scanInFlight) return;
+  scanInFlight = true;
   const startedAt = performance.now();
   try {
+    // Our own highlight overlay must not be part of the audited DOM.
+    clearHighlight();
+    await waitForPageSettled();
+
     const results = await axe.run(document, {
       runOnly: { type: "tag", values: [...AXE_WCAG_TAGS] },
       rules: { ...EXPERIMENTAL_RULES },
+      // axe defaults to iframes:true, which postMessage-probes every
+      // child frame for an axe instance. We only inject into the top
+      // frame, so those probes NEVER succeed — they just race a
+      // timeout whose outcome depends on how many ad/embed frames had
+      // loaded on that particular machine at that particular moment.
+      // That race was a direct cause of cross-machine result drift.
+      // Disable it: deterministic top-document scan. Real iframe
+      // coverage means injecting the runner all_frames (Phase 2) —
+      // NOT re-enabling this flag on a top-frame-only install.
+      iframes: false,
     });
 
-    const violations: ProcessedViolation[] = results.violations.map((v) => {
-      const promoted = PROMOTED_BEST_PRACTICE_RULES[v.id];
-      const wcagCriteria = promoted ? [...promoted] : extractWcagCriteria(v.tags);
-      const isBestPractice = !promoted && v.tags.includes("best-practice");
-      return {
-        ruleId: v.id,
-        impact: (v.impact ?? "minor") as ViolationImpact,
-        description: v.description,
-        help: v.help,
-        helpUrl: v.helpUrl,
-        wcagCriteria,
-        isBestPractice,
-        source: "axe",
-        nodes: v.nodes.map((n) => ({
-          html: (n.html ?? "").slice(0, 500),
-          target: n.target as string[],
-          failureSummary: n.failureSummary ?? "",
-        })),
-      };
-    });
+    const violations = results.violations.map(toProcessed);
+    // axe "incomplete" = checks it could not decide automatically
+    // (contrast over an image, aria references it can't resolve…).
+    // Competitor scanners surface these as "needs review" — dropping
+    // them silently under-reports. They are NOT violations: excluded
+    // from counts and score, shown in their own section.
+    const needsReview = results.incomplete.map(toProcessed);
 
     const counts = aggregateSeverityCountsFromProcessed(violations);
     const score = computeSiteScore(counts);
@@ -73,15 +200,43 @@ async function runScan(): Promise<void> {
       violations,
       counts,
       score,
+      environment: captureEnvironment(results.testEngine.version),
+      needsReview,
     });
-    chrome.runtime.sendMessage(message);
+    safeSend(message);
   } catch (err) {
     const message = scanErrorMessage.parse({
       type: "scan/error",
       message: err instanceof Error ? err.message : String(err),
     });
-    chrome.runtime.sendMessage(message);
+    safeSend(message);
+  } finally {
+    scanInFlight = false;
   }
+}
+
+function toProcessed(v: axe.Result): ProcessedViolation {
+  const promoted = PROMOTED_BEST_PRACTICE_RULES[v.id];
+  const wcagCriteria = promoted ? [...promoted] : extractWcagCriteria(v.tags);
+  const isBestPractice = !promoted && v.tags.includes("best-practice");
+  return {
+    ruleId: v.id,
+    impact: (v.impact ?? "minor") as ViolationImpact,
+    description: v.description,
+    help: v.help,
+    helpUrl: v.helpUrl,
+    wcagCriteria,
+    isBestPractice,
+    source: "axe",
+    nodes: v.nodes.map((n) => ({
+      html: (n.html ?? "").slice(0, 500),
+      // axe target entries are string | string[] — the array form is
+      // a shadow-DOM chain. Flatten so the shared ProcessedNode
+      // string[] shape holds; highlight splits it back apart.
+      target: flattenTarget(n.target as ReadonlyArray<string | string[]>),
+      failureSummary: n.failureSummary ?? "",
+    })),
+  };
 }
 
 /**
@@ -187,13 +342,33 @@ function drawOverlay(target: Element, label?: string): void {
   document.addEventListener("keydown", highlightEscHandler, true);
 }
 
-function highlightSelector(selector: string, label?: string): boolean {
-  let target: Element | null = null;
-  try {
-    target = document.querySelector(selector);
-  } catch {
-    return false;
+/**
+ * Resolve a flattened axe selector, walking shadow roots for chain
+ * selectors (see lib/target.ts). Closed shadow roots are opaque to
+ * axe too, so any chain axe produced is walkable in principle —
+ * null just means the element is gone (SPA re-render since scan).
+ */
+function resolveSelector(selector: string): Element | null {
+  const hops = splitSelectorChain(selector);
+  let root: Document | ShadowRoot = document;
+  let el: Element | null = null;
+  for (let i = 0; i < hops.length; i++) {
+    try {
+      el = root.querySelector(hops[i]!);
+    } catch {
+      return null; // malformed selector
+    }
+    if (!el) return null;
+    if (i < hops.length - 1) {
+      if (!el.shadowRoot) return null;
+      root = el.shadowRoot;
+    }
   }
+  return el;
+}
+
+function highlightSelector(selector: string, label?: string): boolean {
+  const target = resolveSelector(selector);
   if (!(target instanceof Element)) return false;
 
   // Kick off the scroll. scrollIntoView is a no-op if the element
@@ -254,12 +429,15 @@ function highlightSelector(selector: string, label?: string): boolean {
 chrome.runtime.onMessage.addListener((raw, _sender, sendResponse) => {
   const scan = runScanCommand.safeParse(raw);
   if (scan.success) {
-    void runScan();
+    if (claimDispatch("scan/run")) void runScan();
+    sendResponse({ ok: true });
     return false;
   }
   const highlight = highlightNodeCommand.safeParse(raw);
   if (highlight.success) {
-    const ok = highlightSelector(highlight.data.selector, highlight.data.label);
+    const ok = claimDispatch(`hl:${highlight.data.selector}`)
+      ? highlightSelector(highlight.data.selector, highlight.data.label)
+      : true; // another live copy already handled this dispatch
     sendResponse({ ok });
     return false;
   }

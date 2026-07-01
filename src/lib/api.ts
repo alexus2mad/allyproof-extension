@@ -40,21 +40,54 @@ async function apiBase(): Promise<string> {
   return s.apiBase.replace(/\/+$/, "");
 }
 
-async function refreshAuth(): Promise<AuthState | null> {
+/**
+ * Refresh is single-flight. The refresh token ROTATES on use — if
+ * two requests 401 at the same time (save + AI fix in parallel) and
+ * both fire their own refresh, the second one presents the already-
+ * consumed token, gets rejected, and wrongly signs the user out.
+ * All concurrent callers share one in-flight refresh instead.
+ */
+let refreshInFlight: Promise<AuthState | null> | null = null;
+
+function refreshAuth(): Promise<AuthState | null> {
+  refreshInFlight ??= doRefresh().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
+
+async function doRefresh(): Promise<AuthState | null> {
   const stored = await getStoredRefreshToken();
   if (!stored) return null;
 
   const base = await apiBase();
-  const res = await fetch(`${base}/api/extensions/refresh`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: stored.refreshToken }),
-  });
-  if (!res.ok) {
-    await clearAuth();
+  let res: Response;
+  try {
+    res = await fetch(`${base}/api/extensions/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: stored.refreshToken }),
+    });
+  } catch {
+    // Network failure is transient — do NOT clear auth. The stored
+    // refresh token is still valid; the next attempt can succeed.
     return null;
   }
-  const parsed = refreshResponse.parse(await res.json());
+  if (!res.ok) {
+    // Only a definitive rejection (the server judged the token
+    // invalid/expired) revokes local auth. A 5xx or gateway hiccup
+    // must not sign the user out.
+    if (res.status === 400 || res.status === 401 || res.status === 403) {
+      await clearAuth();
+    }
+    return null;
+  }
+  let parsed: z.infer<typeof refreshResponse>;
+  try {
+    parsed = refreshResponse.parse(await res.json());
+  } catch {
+    return null; // malformed body — treat as transient
+  }
   if (!parsed.data) {
     await clearAuth();
     return null;
@@ -99,19 +132,36 @@ async function authedRequest<T>(
   }
 
   const base = await apiBase();
-  const res = await fetch(`${base}${path}`, {
-    ...init,
-    headers: {
-      ...(init.headers ?? {}),
-      "Content-Type": "application/json",
-      "x-extension-token": auth.accessToken,
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${base}${path}`, {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        "Content-Type": "application/json",
+        "x-extension-token": auth.accessToken,
+      },
+    });
+  } catch {
+    // fetch rejects on network failure. Uncaught, this left the UI
+    // stuck on "Saving…"/"Generating…" forever — every caller
+    // expects an ApiResult, never a throw.
+    return {
+      data: null,
+      error: {
+        message: "Network error — check your connection and retry",
+        code: "network_error",
+        status: 0,
+      },
+    };
+  }
 
   if (res.status === 401 && !isRetry) {
     const refreshed = await refreshAuth();
     if (refreshed) return authedRequest(path, init, validator, true);
-    await clearAuth();
+    // No clearAuth here — refreshAuth already cleared it if (and
+    // only if) the server definitively rejected the token. On a
+    // transient refresh failure the session survives for a retry.
     return {
       data: null,
       error: {

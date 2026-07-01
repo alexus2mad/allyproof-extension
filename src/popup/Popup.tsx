@@ -26,7 +26,11 @@ import {
   PictureInPicture2,
   ListChecks,
 } from "lucide-react";
-import type { ProcessedViolation, SeverityCounts } from "@allyproof/scan-core";
+import type {
+  ProcessedViolation,
+  SeverityCounts,
+  ViolationImpact,
+} from "@allyproof/scan-core";
 import { totalIssueCount } from "@allyproof/scan-core";
 import { scoreColorClasses } from "@/lib/scoring";
 import {
@@ -35,7 +39,10 @@ import {
   scanErrorMessage,
   openDetachedPanelRequest,
   closeDetachedPanelRequest,
+  highlightNodeRequest,
 } from "@/lib/messages";
+import type { ScanEnvironment } from "@/lib/messages";
+import { buildPageReport, reportFileName, timeAgo } from "@/lib/report";
 import { uploadScan, aiFix, startCrawl } from "@/lib/api";
 import {
   getAuth,
@@ -61,6 +68,11 @@ type ScanState =
       score: number;
       counts: SeverityCounts;
       violations: ProcessedViolation[];
+      needsReview: ProcessedViolation[];
+      /** When the scan ran (ISO) — results from history can be old. */
+      scannedAt: string;
+      /** null for scans stored before environment capture shipped. */
+      environment: ScanEnvironment | null;
     }
   | { stage: "error"; pageUrl: string | null; message: string };
 
@@ -170,6 +182,9 @@ export function Popup() {
             score: match.score,
             counts: match.counts,
             violations: match.violations,
+            needsReview: match.needsReview ?? [],
+            scannedAt: match.scannedAt,
+            environment: match.environment ?? null,
           });
           return;
         }
@@ -214,36 +229,83 @@ export function Popup() {
     };
   }, []);
 
-  // Listen for scan results streamed from background (which
-  // forwards from the content script).
+  // Listen for scan results streamed straight from the content
+  // script. Results are TAB-SCOPED: chrome.runtime.onMessage
+  // receives every tab's messages, so with two tabs scanning
+  // concurrently a panel would otherwise flip to whichever result
+  // landed last — a different page than the one on screen. The
+  // sender.tab check pins the update to the tab this surface is
+  // actually showing.
   useEffect(() => {
-    const listener = (raw: unknown) => {
+    const listener = (raw: unknown, sender: chrome.runtime.MessageSender) => {
       const result = scanResultMessage.safeParse(raw);
       if (result.success) {
-        const r = result.data;
-        setScan({
-          stage: "ready",
-          pageUrl: r.url,
-          pageTitle: r.pageTitle,
-          durationMs: r.durationMs,
-          score: r.score,
-          counts: r.counts as SeverityCounts,
-          violations: r.violations as ProcessedViolation[],
-        });
+        const senderTabId = sender.tab?.id;
+        void (async () => {
+          const target = await getTargetTab();
+          if (senderTabId != null && target?.id !== senderTabId) return;
+          const r = result.data;
+          setScan({
+            stage: "ready",
+            pageUrl: r.url,
+            pageTitle: r.pageTitle,
+            durationMs: r.durationMs,
+            score: r.score,
+            counts: r.counts as SeverityCounts,
+            violations: r.violations as ProcessedViolation[],
+            needsReview: (r.needsReview ?? []) as ProcessedViolation[],
+            scannedAt: new Date().toISOString(),
+            environment: r.environment,
+          });
+        })();
         return;
       }
       const err = scanErrorMessage.safeParse(raw);
       if (err.success) {
-        setScan((prev) => ({
-          stage: "error",
-          pageUrl: "pageUrl" in prev ? prev.pageUrl : null,
-          message: err.data.message,
-        }));
+        // Errors come from two origins: the content script (has
+        // sender.tab — apply the same tab filter) and the service
+        // worker's injection-failure path (no sender.tab — always
+        // for our own scan request, accept).
+        const senderTabId = sender.tab?.id;
+        void (async () => {
+          if (senderTabId != null) {
+            const target = await getTargetTab();
+            if (target?.id !== senderTabId) return;
+          }
+          setScan((prev) => ({
+            stage: "error",
+            pageUrl: "pageUrl" in prev ? prev.pageUrl : null,
+            message: err.data.message,
+          }));
+        })();
       }
     };
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
   }, []);
+
+  // Watchdog — "Scanning…" must never be terminal. The content
+  // script can die mid-scan (page navigated away, extension
+  // reloaded, tab discarded) and no scan/result or scan/error will
+  // ever arrive. Page-settle waits cap at ~13s and axe itself runs
+  // seconds even on heavy DOMs, so 45s of silence means the scan is
+  // gone, not slow.
+  useEffect(() => {
+    if (scan.stage !== "scanning") return;
+    const timer = setTimeout(() => {
+      setScan((prev) =>
+        prev.stage === "scanning"
+          ? {
+              stage: "error",
+              pageUrl: prev.pageUrl,
+              message:
+                "The scan didn't respond within 45 seconds. The page may have navigated away mid-scan — try again.",
+            }
+          : prev
+      );
+    }, 45_000);
+    return () => clearTimeout(timer);
+  }, [scan.stage]);
 
   const startScan = async () => {
     const tab = await getTargetTab();
@@ -545,12 +607,28 @@ function ResultView({
   const colors = scoreColorClasses(scan.score);
   const total = totalIssueCount(scan.counts);
   const isPanel = surface !== "popup";
+  // Inspection filters — clicking a severity chip narrows the list
+  // to that severity (click again to clear); best-practice items
+  // can be hidden for a strict-WCAG-only view.
+  const [severityFilter, setSeverityFilter] = useState<ViolationImpact | null>(
+    null
+  );
+  const [showBestPractice, setShowBestPractice] = useState(true);
+
   // Panel surfaces have room for the full list; the action popup
   // is space-constrained and now hands off to the panel via the
   // "Show all" button below.
   const violations = scan.violations
     .slice()
     .sort((a, b) => severityRank(a.impact) - severityRank(b.impact));
+  const filtered = violations.filter(
+    (v) =>
+      (severityFilter == null || v.impact === severityFilter) &&
+      (showBestPractice || !v.isBestPractice)
+  );
+  const bestPracticeCount = violations.filter((v) => v.isBestPractice).length;
+  const elementCount = violations.reduce((n, v) => n + v.nodes.length, 0);
+  const age = timeAgo(scan.scannedAt);
 
   return (
     <div className="flex flex-1 flex-col gap-3">
@@ -562,16 +640,44 @@ function ResultView({
           out of 100 · WCAG 2.2 AA
         </div>
         <div className="mt-2 text-xs text-muted-foreground">
-          {total} {total === 1 ? "issue" : "issues"} · scanned in{" "}
-          {(scan.durationMs / 1000).toFixed(1)}s
+          {total} {total === 1 ? "issue" : "issues"}
+          {elementCount > 0 && ` · ${elementCount} elements`}
+          {scan.needsReview.length > 0 && ` · ${scan.needsReview.length} to review`}
+          {" · "}
+          {(scan.durationMs / 1000).toFixed(1)}s{age && ` · ${age}`}
         </div>
+        {scan.environment && <EnvironmentLine env={scan.environment} />}
       </div>
 
       <div className="grid grid-cols-4 gap-2 text-center">
-        <SeverityChip label="Critical" count={scan.counts.critical} severity="critical" />
-        <SeverityChip label="Serious" count={scan.counts.serious} severity="serious" />
-        <SeverityChip label="Moderate" count={scan.counts.moderate} severity="moderate" />
-        <SeverityChip label="Minor" count={scan.counts.minor} severity="minor" />
+        <SeverityChip
+          label="Critical"
+          count={scan.counts.critical}
+          severity="critical"
+          active={severityFilter === "critical"}
+          onToggle={isPanel ? setSeverityFilter : undefined}
+        />
+        <SeverityChip
+          label="Serious"
+          count={scan.counts.serious}
+          severity="serious"
+          active={severityFilter === "serious"}
+          onToggle={isPanel ? setSeverityFilter : undefined}
+        />
+        <SeverityChip
+          label="Moderate"
+          count={scan.counts.moderate}
+          severity="moderate"
+          active={severityFilter === "moderate"}
+          onToggle={isPanel ? setSeverityFilter : undefined}
+        />
+        <SeverityChip
+          label="Minor"
+          count={scan.counts.minor}
+          severity="minor"
+          active={severityFilter === "minor"}
+          onToggle={isPanel ? setSeverityFilter : undefined}
+        />
       </div>
 
       <SaveToDashboardCallout scan={scan} />
@@ -581,25 +687,138 @@ function ResultView({
 
       {isPanel && violations.length > 0 && (
         <div className="flex flex-col gap-2">
-          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            All issues ({violations.length})
+          <div className="flex items-center gap-2">
+            <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {severityFilter
+                ? `${severityFilter} issues (${filtered.length})`
+                : `All issues (${filtered.length})`}
+            </div>
+            {bestPracticeCount > 0 && (
+              <label className="ml-auto flex cursor-pointer items-center gap-1 text-[10px] text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={showBestPractice}
+                  onChange={(e) => setShowBestPractice(e.target.checked)}
+                  className="h-3 w-3"
+                />
+                Best practice ({bestPracticeCount})
+              </label>
+            )}
           </div>
           <ul className="flex flex-col gap-2">
-            {violations.map((v) => (
+            {filtered.map((v) => (
               <ViolationRow key={v.ruleId} violation={v} />
             ))}
           </ul>
+          {filtered.length === 0 && (
+            <p className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
+              No issues match the current filter.
+            </p>
+          )}
         </div>
       )}
 
+      {isPanel && scan.needsReview.length > 0 && (
+        <NeedsReviewSection items={scan.needsReview} />
+      )}
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={onRescan}
+          className="flex-1 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-muted"
+        >
+          Re-scan
+        </button>
+        <ExportReportButton scan={scan} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * axe "incomplete" results — the engine saw a potential problem but
+ * couldn't verify it automatically (contrast over a background
+ * image, an aria reference it can't resolve, …). Every serious
+ * competitor surfaces these; hiding them silently under-reports.
+ * They're excluded from the score, so the section is visually
+ * secondary and collapsed by default.
+ */
+function NeedsReviewSection({ items }: { items: ProcessedViolation[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="flex flex-col gap-2">
       <button
         type="button"
-        onClick={onRescan}
-        className="rounded-md border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-muted"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex items-center gap-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground"
       >
-        Re-scan
+        {open ? (
+          <ChevronUp className="h-3 w-3" aria-hidden />
+        ) : (
+          <ChevronDown className="h-3 w-3" aria-hidden />
+        )}
+        Needs review ({items.length})
       </button>
+      {open && (
+        <>
+          <p className="text-[11px] text-muted-foreground">
+            The scanner saw a potential problem here but couldn&apos;t verify
+            it automatically — check these manually. Not counted in the score.
+          </p>
+          <ul className="flex flex-col gap-2">
+            {items.map((v) => (
+              <ViolationRow key={v.ruleId} violation={v} />
+            ))}
+          </ul>
+        </>
+      )}
     </div>
+  );
+}
+
+/**
+ * Download the current result as JSON — scan evidence for client
+ * archives, diffing two scans, or piping into other tooling.
+ */
+function ExportReportButton({
+  scan,
+}: {
+  scan: Extract<ScanState, { stage: "ready" }>;
+}) {
+  const download = () => {
+    const report = buildPageReport({
+      url: scan.pageUrl,
+      pageTitle: scan.pageTitle,
+      scannedAt: scan.scannedAt,
+      durationMs: scan.durationMs,
+      score: scan.score,
+      counts: scan.counts,
+      violations: scan.violations,
+      needsReview: scan.needsReview,
+      environment: scan.environment,
+    });
+    const blob = new Blob([JSON.stringify(report, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = reportFileName(scan.pageUrl, scan.scannedAt);
+    a.click();
+    // Give the download a moment to start before releasing the blob.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  };
+  return (
+    <button
+      type="button"
+      onClick={download}
+      title="Download this result as JSON"
+      className="rounded-md border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-muted"
+    >
+      Export
+    </button>
   );
 }
 
@@ -782,14 +1001,47 @@ function SaveToDashboardCallout({
   );
 }
 
+/**
+ * Test-condition footer for the score card. Automated WCAG results
+ * are only comparable when they came from the same render
+ * conditions — a different viewport crosses responsive breakpoints
+ * and audits different DOM; zoom/DPR moves target-size; OS dark
+ * mode changes every color-contrast input. Showing the conditions
+ * inline is how "the scan shows different results on my other PC"
+ * stops being a bug report and starts being an explanation.
+ */
+function EnvironmentLine({ env }: { env: ScanEnvironment }) {
+  const zoomish = Math.round(env.devicePixelRatio * 100) / 100;
+  const parts = [
+    `${env.viewportWidth}×${env.viewportHeight}`,
+    `${zoomish}× DPR`,
+    env.colorScheme === "dark" ? "dark mode" : "light mode",
+    ...(env.forcedColors ? ["forced colors"] : []),
+    `axe ${env.axeVersion}`,
+  ];
+  return (
+    <div
+      className="mt-1 text-[10px] text-muted-foreground/80"
+      title="Scan conditions. Results are comparable only across scans with matching viewport, zoom, and color scheme — responsive layouts show different content at different sizes."
+    >
+      {parts.join(" · ")}
+    </div>
+  );
+}
+
 function SeverityChip({
   label,
   count,
   severity,
+  active = false,
+  onToggle,
 }: {
   label: string;
   count: number;
-  severity: "critical" | "serious" | "moderate" | "minor";
+  severity: ViolationImpact;
+  active?: boolean;
+  /** Present on panel surfaces — makes the chip a filter toggle. */
+  onToggle?: (next: ViolationImpact | null) => void;
 }) {
   const tone =
     severity === "critical"
@@ -799,13 +1051,29 @@ function SeverityChip({
         : severity === "moderate"
           ? "text-amber-600 dark:text-amber-400"
           : "text-muted-foreground";
-  return (
-    <div className="rounded-md border border-border bg-card p-2">
+  const body = (
+    <>
       <div className={`text-lg font-semibold ${tone}`}>{count}</div>
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
-    </div>
+    </>
+  );
+  if (!onToggle) {
+    return <div className="rounded-md border border-border bg-card p-2">{body}</div>;
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(active ? null : severity)}
+      aria-pressed={active}
+      title={active ? "Clear filter" : `Show only ${severity} issues`}
+      className={`rounded-md border p-2 transition-colors hover:bg-muted/50 ${
+        active ? "border-primary ring-1 ring-primary" : "border-border bg-card"
+      }`}
+    >
+      {body}
+    </button>
   );
 }
 
@@ -911,11 +1179,24 @@ function HighlightButton({
       return;
     }
     try {
-      await chrome.tabs.sendMessage(tab.id, {
-        type: "scan/highlight",
-        selector,
-        label: label?.slice(0, 80),
-      });
+      // Via the background, which re-injects the content script if
+      // the page was reloaded since the scan (a direct
+      // tabs.sendMessage would just throw "receiving end does not
+      // exist"). The response's ok is the content script's verdict:
+      // false = element no longer in the DOM.
+      const res = (await chrome.runtime.sendMessage(
+        highlightNodeRequest.parse({
+          type: "highlight/start",
+          tabId: tab.id,
+          selector,
+          label: label?.slice(0, 80),
+        })
+      )) as { ok?: boolean } | undefined;
+      if (!res?.ok) {
+        setState("fail");
+        setTimeout(() => setState("idle"), 1500);
+        return;
+      }
 
       setState("ok");
 
@@ -959,7 +1240,7 @@ function HighlightButton({
       }`}
     >
       <Crosshair className="h-3 w-3" aria-hidden />
-      {state === "ok" ? "On page" : state === "fail" ? "Failed" : "Show"}
+      {state === "ok" ? "On page" : state === "fail" ? "Not found" : "Show"}
     </button>
   );
 }
@@ -1067,9 +1348,16 @@ type AiState =
   | { stage: "error"; message: string }
   | { stage: "auth-required" };
 
+/** How many failing elements to render before collapsing the rest. */
+const NODE_DISPLAY_CAP = 10;
+
 function ViolationDetail({ violation }: { violation: ProcessedViolation }) {
   const [ai, setAi] = useState<AiState>({ stage: "idle" });
+  const [showAllNodes, setShowAllNodes] = useState(false);
   const node = violation.nodes[0];
+  const nodes = showAllNodes
+    ? violation.nodes
+    : violation.nodes.slice(0, NODE_DISPLAY_CAP);
 
   const generate = async () => {
     setAi({ stage: "loading" });
@@ -1103,15 +1391,52 @@ function ViolationDetail({ violation }: { violation: ProcessedViolation }) {
 
   return (
     <div className="border-t border-border bg-muted/20 p-2">
-      {node?.html && (
-        <details className="mb-2">
-          <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground">
-            Failing HTML
-          </summary>
-          <pre className="mt-1 whitespace-pre-wrap break-all rounded-sm bg-background p-2 font-mono text-[10px] leading-snug">
-            <code>{prettyHtml(node.html)}</code>
-          </pre>
-        </details>
+      {violation.nodes.length > 0 && (
+        <div className="mb-2 flex flex-col gap-1">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Failing elements ({violation.nodes.length})
+          </div>
+          {nodes.map((n, i) => {
+            const selector = n.target[0] ?? "";
+            return (
+              <div key={`${selector}-${i}`} className="rounded-sm bg-background p-1.5">
+                <div className="flex items-center gap-2">
+                  <code
+                    className="min-w-0 flex-1 truncate font-mono text-[10px]"
+                    title={selector}
+                  >
+                    {selector || "(no selector)"}
+                  </code>
+                  {selector && (
+                    <HighlightButton
+                      selector={selector}
+                      label={violation.help || violation.ruleId}
+                    />
+                  )}
+                </div>
+                {n.html && (
+                  <details className="mt-1">
+                    <summary className="cursor-pointer text-[10px] text-muted-foreground">
+                      HTML
+                    </summary>
+                    <pre className="mt-1 whitespace-pre-wrap break-all rounded-sm bg-muted/40 p-1.5 font-mono text-[10px] leading-snug">
+                      <code>{prettyHtml(n.html)}</code>
+                    </pre>
+                  </details>
+                )}
+              </div>
+            );
+          })}
+          {violation.nodes.length > NODE_DISPLAY_CAP && !showAllNodes && (
+            <button
+              type="button"
+              onClick={() => setShowAllNodes(true)}
+              className="w-fit text-[10px] text-primary hover:underline"
+            >
+              Show all {violation.nodes.length} elements
+            </button>
+          )}
+        </div>
       )}
       {ai.stage === "idle" && (
         <button

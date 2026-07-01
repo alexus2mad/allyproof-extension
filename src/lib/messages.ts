@@ -47,6 +47,32 @@ export type HighlightNodeRequest = z.infer<typeof highlightNodeRequest>;
 
 // ── Content script → Background ───────────────────────────────────
 
+/**
+ * Snapshot of the rendering environment at scan time. axe results
+ * legitimately differ across machines — responsive breakpoints
+ * show/hide DOM (viewport), zoom and DPR change target-size math,
+ * OS dark mode swaps the palette color-contrast is computed from,
+ * forced-colors overrides it entirely. Recording the environment
+ * with every scan makes those differences explainable instead of
+ * looking like scanner nondeterminism, and tells support whether
+ * two "same page, different results" reports are actually the same
+ * test conditions.
+ */
+export const scanEnvironment = z.object({
+  viewportWidth: z.number().int().positive(),
+  viewportHeight: z.number().int().positive(),
+  devicePixelRatio: z.number().positive(),
+  colorScheme: z.enum(["light", "dark"]),
+  forcedColors: z.boolean(),
+  reducedMotion: z.boolean(),
+  language: z.string(),
+  userAgent: z.string(),
+  /** axe-core engine version, read from the live results object. */
+  axeVersion: z.string(),
+  extensionVersion: z.string(),
+});
+export type ScanEnvironment = z.infer<typeof scanEnvironment>;
+
 export const scanResultMessage = z.object({
   type: z.literal("scan/result"),
   url: z.string().url(),
@@ -65,10 +91,16 @@ export const scanResultMessage = z.object({
     minor: z.number().int().nonnegative(),
   }),
   score: z.number().int().min(0).max(100),
+  environment: scanEnvironment,
+  // axe "incomplete" results — checks the engine couldn't decide
+  // automatically. Surfaced as a "Needs review" section; never
+  // counted in `counts` or `score`.
+  needsReview: z.array(z.unknown()),
 });
 export type ScanResultMessage = z.infer<typeof scanResultMessage> & {
   violations: ProcessedViolation[];
   counts: SeverityCounts;
+  needsReview: ProcessedViolation[];
 };
 
 export const scanErrorMessage = z.object({

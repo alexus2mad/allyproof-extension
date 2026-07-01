@@ -125,21 +125,22 @@ async function openDetachedPanel(
   if (win?.id != null) await setPanelWindowId(win.id);
 }
 
-async function injectAndScan(tabId: number): Promise<void> {
-  // Happy path: the content script is auto-injected on http(s)
-  // pages by the manifest declaration. Try sending the scan/run
-  // message directly.
+/**
+ * Deliver `message` to the tab's content script, injecting the
+ * scan-runner first if no listener answers. Missing listener means
+ * the tab was open before the extension was installed/reloaded —
+ * the static content_scripts declaration only fires on subsequent
+ * page loads; programmatic injection covers the gap. Used by both
+ * the scan and highlight paths so they share one reliability story.
+ */
+async function sendToTabWithInjection(
+  tabId: number,
+  message: unknown
+): Promise<unknown> {
   try {
-    await chrome.tabs.sendMessage(tabId, { type: "scan/run" });
-    return;
+    return await chrome.tabs.sendMessage(tabId, message);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    // "Receiving end does not exist" / "Could not establish
-    // connection" both mean: the content script isn't running in
-    // this tab. That happens when the tab was open before the
-    // extension was installed/reloaded — the static content_scripts
-    // declaration only fires on subsequent page loads. Programmatic
-    // injection covers the gap.
     const looksLikeMissingReceiver =
       /receiving end does not exist|could not establish connection/i.test(msg);
     if (!looksLikeMissingReceiver) throw err;
@@ -159,7 +160,11 @@ async function injectAndScan(tabId: number): Promise<void> {
   });
   // After injection the listener is registered; the original
   // sendMessage can now succeed.
-  await chrome.tabs.sendMessage(tabId, { type: "scan/run" });
+  return await chrome.tabs.sendMessage(tabId, message);
+}
+
+async function injectAndScan(tabId: number): Promise<void> {
+  await sendToTabWithInjection(tabId, { type: "scan/run" });
 }
 
 /**
@@ -238,6 +243,8 @@ chrome.runtime.onMessage.addListener((raw, sender, sendResponse) => {
         score: r.score,
         counts: r.counts,
         violations: r.violations,
+        needsReview: r.needsReview,
+        environment: r.environment,
         dashboardScanId: null,
       });
     })();
@@ -301,21 +308,30 @@ chrome.runtime.onMessage.addListener((raw, sender, sendResponse) => {
   }
 
   // Popup → "highlight this selector on tab X". Forward to the
-  // tab's content script. Returning true keeps the message channel
-  // open for the async sendResponse from the content side.
+  // tab's content script, injecting it first if the page was
+  // (re)loaded since the scan and the static script isn't there.
+  // The response is the content script's real verdict — {ok:false}
+  // when the element no longer exists — so the popup can show
+  // "gone" instead of pretending the highlight worked. Returning
+  // true keeps the message channel open for the async sendResponse.
   const hl = highlightNodeRequest.safeParse(raw);
   if (hl.success) {
-    void chrome.tabs
-      .sendMessage(hl.data.tabId, {
-        type: "scan/highlight",
-        selector: hl.data.selector,
-        label: hl.data.label,
+    void sendToTabWithInjection(hl.data.tabId, {
+      type: "scan/highlight",
+      selector: hl.data.selector,
+      label: hl.data.label,
+    })
+      .then((res) => {
+        const ok =
+          typeof res === "object" && res != null && "ok" in res
+            ? Boolean((res as { ok: unknown }).ok)
+            : false;
+        sendResponse({ ok });
       })
       .catch(() => {
-        /* tab might be on a non-injected origin; the popup will
-           surface a soft error message via the resolved value */
+        // chrome:// page, PDF viewer, Web Store — uninjectable.
+        sendResponse({ ok: false });
       });
-    sendResponse({ ok: true });
     return true;
   }
 
