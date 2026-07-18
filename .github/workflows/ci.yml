@@ -74,6 +74,12 @@ jobs:
         working-directory: allyproof-extension
         run: npm ci
 
+      # icon-*.png are deliberately gitignored (see scripts/generate-icons.mjs)
+      # — every fresh checkout must regenerate them before building.
+      - name: Generate icons
+        working-directory: allyproof-extension
+        run: node scripts/generate-icons.mjs
+
       - name: Typecheck
         working-directory: allyproof-extension
         run: npm run typecheck
