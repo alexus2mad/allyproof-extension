@@ -5,6 +5,24 @@
 > when uploading the update. Keep entries user-facing, not internal —
 > reviewers and end-users read these.
 
+## 1.1.0 — July 2026 (consistency + deeper inspection)
+
+- Consistent results across machines: scans now wait for the page to fully
+  settle (fonts, layout) before running, and each scan records the
+  environment it ran in (viewport, zoom, color scheme, language) so
+  differing results are explainable
+- "Needs review" section: items axe-core couldn't decide automatically are
+  now listed separately for manual checking (never counted against your score)
+- See every failing element per rule — highlight and inspect each one
+  individually, including elements inside shadow DOM
+- Severity filter chips and a toggle to show/hide best-practice rules
+- Export the full scan as a JSON report
+- Scan-age label so you always know how fresh the results are
+- Reliability: scans can no longer get stuck on "Saving…" after a network
+  drop, switching tabs mid-scan no longer mixes up results between tabs,
+  and signed-in sessions survive flaky connections
+- Requires Chrome 116 or newer
+
 ## 1.0.0 — May 2, 2026 (initial public release)
 
 - One-click WCAG 2.2 AA scan of the current page (axe-core, runs locally)
