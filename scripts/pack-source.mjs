@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const RELEASE = path.join(ROOT, "release");
+const SCAN_CORE = path.resolve(ROOT, "../accessiscan/services/scan-core");
 
 // Glob-ish allow list (relative to ROOT). The archiver runs against
 // the repo root, filtering each entry through `entryAccept`.
@@ -42,6 +43,7 @@ const INCLUDE_FILES = [
   "tsconfig.app.json",
   "tsconfig.node.json",
   "vite.config.ts",
+  "eslint.config.js",
   "README.md",
   "LICENSE",
 ];
@@ -62,6 +64,11 @@ const EXCLUDE_PATTERNS = [
 await main();
 
 async function main() {
+  for (const required of ["src", "package.json", "tsconfig.json", "LICENSE"]) {
+    if (!existsSync(path.join(SCAN_CORE, required))) {
+      throw new Error(`Shared scan engine source is missing: ${required}`);
+    }
+  }
   const pkg = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"));
   const version = pkg.version;
   if (!/^\d+\.\d+\.\d+$/.test(version)) {
@@ -101,15 +108,34 @@ function zipSources(outPath) {
     for (const dir of INCLUDE_DIRS) {
       const full = path.join(ROOT, dir);
       if (existsSync(full)) {
-        archive.directory(full, dir, (entry) =>
+        archive.directory(full, `allyproof-extension/${dir}`, (entry) =>
           excluded(entry.name) ? false : entry
         );
       }
     }
     for (const file of INCLUDE_FILES) {
       const full = path.join(ROOT, file);
-      if (existsSync(full)) archive.file(full, { name: file });
+      if (existsSync(full)) archive.file(full, { name: `allyproof-extension/${file}` });
     }
+    // Preserve the sibling layout required by the local file: dependency.
+    // Include only engine sources/configuration, never the application or env.
+    archive.directory(path.join(SCAN_CORE, "src"), "accessiscan/services/scan-core/src", (entry) =>
+      excluded(entry.name) ? false : entry
+    );
+    for (const file of ["package.json", "package-lock.json", "tsconfig.json", "README.md", "LICENSE"]) {
+      const full = path.join(SCAN_CORE, file);
+      if (existsSync(full)) archive.file(full, { name: `accessiscan/services/scan-core/${file}` });
+    }
+    archive.append(
+      "AllyProof extension source rebuild (Node.js 20 or newer)\n\n" +
+      "Run from the extracted archive root:\n\n" +
+      "cd accessiscan/services/scan-core\nnpm install --no-audit --no-fund\nnpm run build\n" +
+      "cd ../../../allyproof-extension\nnpm ci --no-audit --no-fund\n" +
+      "node scripts/generate-icons.mjs\nnpm run build:firefox\n\n" +
+      "The unsigned Firefox extension is in allyproof-extension/dist.\n" +
+      "npm run release:firefox creates the store package without source maps.\n",
+      { name: "BUILD-INSTRUCTIONS.txt" }
+    );
     archive.finalize();
   });
 }
