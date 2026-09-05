@@ -15,7 +15,7 @@
  * is anchored to.
  */
 
-import axe from "axe-core";
+import type axe from "axe-core";
 import {
   AXE_WCAG_TAGS,
   EXPERIMENTAL_RULES,
@@ -164,6 +164,10 @@ async function runScan(): Promise<void> {
     // Our own highlight overlay must not be part of the audited DOM.
     clearHighlight();
     await waitForPageSettled();
+
+    // The listener is injected on every page, but the audit engine is needed
+    // only when the user starts a scan. The module loader caches later scans.
+    const { default: axe } = await import("axe-core");
 
     const results = await axe.run(document, {
       runOnly: { type: "tag", values: [...AXE_WCAG_TAGS] },

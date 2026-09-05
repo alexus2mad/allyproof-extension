@@ -1,6 +1,6 @@
 {
   "name": "@allyproof/extension",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "AllyProof browser extension — WCAG accessibility scanner with crawl, AI fixes, and DRAFT VPAT export. Chrome / Edge / Firefox MV3.",
   "license": "MIT",

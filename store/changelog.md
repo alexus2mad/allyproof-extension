@@ -5,6 +5,11 @@
 > when uploading the update. Keep entries user-facing, not internal —
 > reviewers and end-users read these.
 
+## v1.1.1
+
+- Lighter everyday browsing: the accessibility engine now loads only when you start a scan.
+- Existing scan results, issue highlighting, and dashboard features work as before.
+
 ## 1.1.0 — July 2026 (consistency + deeper inspection)
 
 - Consistent results across machines: scans now wait for the page to fully
