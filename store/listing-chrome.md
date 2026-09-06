@@ -34,10 +34,10 @@ WHAT THE EXTENSION DOES
 
 WHAT YOU GET WHEN YOU CONNECT AN ALLYPROOF ACCOUNT
 • Save scans to your dashboard for trend tracking and team sharing
-• AI-rewritten fix code on every violation (powered by Claude)
+• AI fix suggestions for automated findings on eligible plans — review and test before applying
 • Multi-page crawl — kick off a full-site scan from the toolbar and watch results land in the dashboard
-• DRAFT VPAT export for procurement responses
-• Weekly auto-scans across every site in your workspace
+• VPAT-based evidence drafts on eligible plans; qualified evaluation required before procurement use
+• Scheduled monitoring at your plan's frequency
 
 PRIVACY-FIRST DESIGN
 • No <all_urls> host permission — the scanner only runs on the tab you ask it to
@@ -46,10 +46,10 @@ PRIVACY-FIRST DESIGN
 • Open privacy policy at https://allyproof.com/privacy
 
 OPEN STANDARDS
-Powered by axe-core (Deque Systems, MIT). Score and severity classifications match the AllyProof dashboard so the number you see in the popup is the same number your team sees in the report.
+Powered by axe-core (Deque Systems, MPL-2.0). The extension and dashboard share scoring logic. Results can differ when page scope, engine coverage, or tested state differs.
 
 PRICING
-The extension is free. The local quick-scan, side panel, badge, and "Show on page" highlights work without any account. AllyProof account features (cloud save, AI fixes, crawl, VPAT, weekly scans) start at $79/month — see https://allyproof.com for plans.
+The extension is free. Local quick scans, the side panel, badge, and "Show on page" highlights work without an account. Sign in to save scan results. AI suggestions, scheduled monitoring, and VPAT-based evidence drafts require an eligible plan. See https://allyproof.com/pricing for current features and prices.
 
 LINKS
 • Website: https://allyproof.com

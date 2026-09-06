@@ -912,8 +912,8 @@ function SaveToDashboardCallout({
       <div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-xs">
         <div className="mb-2 font-medium">Save to your AllyProof dashboard</div>
         <p className="mb-2 text-muted-foreground">
-          Sign in to track this site over time, get weekly auto-scans, and
-          unlock AI fix suggestions.
+          Sign in to save scan results. AI fix suggestions and weekly monitoring
+          require an eligible plan.
         </p>
         <button
           type="button"

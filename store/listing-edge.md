@@ -11,7 +11,7 @@
 AllyProof: WCAG Audit, AI Fixes & VPAT
 
 ## Short description (max 200 chars on Edge)
-Scan any page for WCAG 2.2 AA accessibility issues. Industry-standard axe-core engine runs locally; AI fix suggestions, multi-site dashboard, and DRAFT VPAT export when you connect an account.
+Check a page for accessibility findings with local axe-core. Account features follow your plan; see allyproof.com/pricing.
 
 ## Description
 Use the same long-form copy as `listing-chrome.md`. Edge has no length limit issue.

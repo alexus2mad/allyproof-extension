@@ -33,7 +33,7 @@ Operating system: Linux, macOS, or Windows. Node.js: 20 LTS or newer.
 AllyProof: WCAG Audit, AI Fixes & VPAT
 
 ## Summary (max 250 chars)
-Scan any page for WCAG 2.2 AA accessibility issues. Industry-standard axe-core engine runs locally; sign in for AI fix suggestions, multi-site dashboard, and DRAFT VPAT export.
+Check a page for accessibility findings with local axe-core. Account features follow your plan; see allyproof.com/pricing.
 
 ## Description
 Use the same long-form copy as `listing-chrome.md`.
